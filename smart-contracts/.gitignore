@@ -1,0 +1,46 @@
+# Hardhat files
+cache
+artifacts
+typechain-types
+
+# Node modules
+node_modules
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Coverage
+coverage
+coverage.json
+
+# IDE
+.idea
+.vscode
+
+# Mac
+.DS_Store
+
+# Logs
+*.log
+
+# Build artifacts
+dist
+build
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Test files
+test-results
+
+# Deployment files
+deployments/localhost
+deployments/hardhat
+
+# Temporary files
+*.tmp
+*.temp
+.temp
+.tmp
