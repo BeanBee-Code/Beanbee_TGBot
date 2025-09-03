@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs (will be rebuilt in container)
+dist/
+build/
+
+# Environment variables (will be provided at runtime)
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+
+# Test files
+**/*.test.ts
+**/*.test.js
+src/tests/
+vitest.config.ts
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Documentation and non-essential files
+*.md
+ENHANCEMENT_GUIDE.md
+HONEY_NATURAL_LANGUAGE_COMMANDS.md
+HYBRID-MONITORING-SUMMARY.md
+RULES.md
+SECURE_ROUTER_MIGRATION.md
+CLAUDE.md
+
+# Development tools
+.eslintcache
+.nyc_output
+coverage/
+*.lcov
+
+# Cache directories
+.npm
+.cache
+.parcel-cache
+
+# Temporary files
+*.tmp
+*.temp
+
+# Package manager files (except lock files)
+.yarn-integrity
+
+# Backup files
+.env-backup
+package-lock.json
