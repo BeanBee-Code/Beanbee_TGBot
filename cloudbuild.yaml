@@ -1,0 +1,28 @@
+substitutions:
+  _STATUSES: "START, FAILURE, INTERNAL_ERROR, TIMEOUT, CANCELLED, SUCCESS"
+ 
+# Add your options here if needed
+options:
+  substitution_option: 'ALLOW_LOOSE'
+
+steps:
+  - name: 'gcr.io/cloud-builders/gsutil'
+    args: ['cp', '-r', $_ENV , './env.json' ]
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '$_CONTAINER_REGISTRY', '.']
+    
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '$_CONTAINER_REGISTRY']
+    
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args: [
+      'run',
+      'deploy',
+      '$_SERVICE_NAME',
+      '--image', '$_CONTAINER_REGISTRY',
+      '--platform', 'managed',
+      '--region', '$_REGION',
+      '--env-vars-file', 'env.json'
+    ]
