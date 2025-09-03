@@ -12,7 +12,7 @@ import { mainMenu } from '../telegram/menus/main';
 const logger = createLogger('api.server');
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 4000;
 
 // Middleware
 app.use(express.json());
@@ -84,10 +84,28 @@ export function getApiBaseUrl(): string {
 
 // API Routes
 
+// Root health check for Cloud Run startup probes
+app.get('/', (_, res) => {
+    res.status(200).json({ 
+        status: 'ok', 
+        service: 'beanbee-tgbot',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        version: '1.0.0'
+    });
+});
 
-// Health check endpoint
+// Enhanced health check endpoint  
 app.get('/api/health', (_, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.status(200).json({ 
+        status: 'ok', 
+        service: 'beanbee-tgbot',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        env: process.env.NODE_ENV || 'development',
+        port: process.env.PORT || 4000
+    });
 });
 
 // Connect wallet endpoint - receives wallet data from frontend
