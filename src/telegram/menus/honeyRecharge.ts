@@ -111,7 +111,13 @@ export async function handleHoneyPurchase(ctx: Context, packageIndex: number): P
     const hasBalance = await HoneyRechargeService.validateBNBBalance(telegramId, selectedPackage.bnbAmount);
     if (!hasBalance) {
       await ctx.answerCbQuery('❌ Insufficient BNB balance');
-      await ctx.reply('⚠️ Insufficient BNB balance (including gas fees). Please add more BNB to your trading wallet.');
+      await ctx.reply('⚠️ Insufficient BNB balance (including gas fees). Please add more BNB to your trading wallet.', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Back', callback_data: 'honey_recharge' }]
+          ]
+        }
+      });
       return;
     }
 
