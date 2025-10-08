@@ -58,6 +58,94 @@ function clearUserWaitingState(userId: number): void {
 	}
 }
 
+/**
+ * Handle percentage-based token transfers
+ * Supports both BNB and ERC20 tokens
+ */
+async function handlePercentageTransfer(ctx: Context, direction: 'to' | 'from', percentage: number) {
+	const userId = ctx.from!.id;
+	const session = global.userSessions.get(userId);
+
+	// Get selected token from session (defaults to BNB)
+	const { COMMON_TOKENS } = await import('../../config/commonTokens');
+	const selectedToken = session?.transfer?.selectedToken || COMMON_TOKENS.BNB;
+
+	// Get balance based on direction
+	let balance: string;
+
+	if (direction === 'to') {
+		// Main wallet to trading
+		const walletAddress = session?.address;
+		if (!walletAddress) {
+			const msg = await getTranslation(ctx, 'common.mainWalletNotConnected');
+			await ctx.answerCbQuery(msg);
+			return;
+		}
+
+		if (selectedToken.address === '0x0000000000000000000000000000000000000000') {
+			// BNB
+			const { getBNBBalance } = await import('../../services/wallet/balance');
+			balance = await getBNBBalance(walletAddress);
+		} else {
+			// ERC20 token
+			const { getTokenBalance } = await import('../../services/wallet/erc20Transfer');
+			const ethers = await import('ethers');
+			const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org/');
+			balance = await getTokenBalance(selectedToken.address, walletAddress, provider);
+		}
+	} else {
+		// Trading wallet to main
+		const { UserService } = await import('../../services/user');
+		const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
+
+		if (!tradingWalletAddress) {
+			const msg = await getTranslation(ctx, 'common.tradingWalletNotFound');
+			await ctx.answerCbQuery(msg);
+			return;
+		}
+
+		if (selectedToken.address === '0x0000000000000000000000000000000000000000') {
+			// BNB
+			const { getBNBBalance } = await import('../../services/wallet/balance');
+			balance = await getBNBBalance(tradingWalletAddress);
+		} else {
+			// ERC20 token
+			const { getTokenBalance } = await import('../../services/wallet/erc20Transfer');
+			const ethers = await import('ethers');
+			const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org/');
+			balance = await getTokenBalance(selectedToken.address, tradingWalletAddress, provider);
+		}
+	}
+
+	// Calculate transfer amount
+	const balanceNum = parseFloat(balance);
+
+	// For 100% transfers, use the exact balance without rounding to avoid "exceeds balance" errors
+	// For other percentages, calculate and round appropriately
+	let transferAmount: string;
+	if (percentage === 1.0) {
+		// Use full balance string directly to preserve all decimal places
+		transferAmount = balance;
+	} else {
+		// For partial amounts, calculate and round to 6 decimals
+		transferAmount = (balanceNum * percentage).toFixed(6);
+	}
+
+	if (parseFloat(transferAmount) < 0.000001) {
+		const msg = await getTranslation(ctx, 'common.amountTooSmall');
+		await ctx.answerCbQuery(msg);
+		return;
+	}
+
+	// Execute transfer
+	const transferService = new TransferService();
+	if (direction === 'to') {
+		return transferService.handleTransferToTrading(ctx, transferAmount);
+	} else {
+		return transferService.handleTransferFromTrading(ctx, transferAmount);
+	}
+}
+
 export function setupCallbacks(
 	bot: Telegraf,
 	walletService: WalletService,
@@ -738,8 +826,9 @@ export function setupCallbacks(
 			return;
 		}
 		
-		// If wallet is connected, proceed to transfer menu
-		await transferService.showTransferToTradingMenu(ctx, 'honey_recharge');
+		// If wallet is connected, proceed to transfer menu with BNB token
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferToTradingMenu(ctx, COMMON_TOKENS.BNB, 'honey_recharge');
 	});
 
 	// Handle honey purchase patterns
@@ -806,180 +895,87 @@ export function setupCallbacks(
 
 	// Transfer actions
 	handleCallback('transfer_menu', (ctx) => transferService.showTransferMenu(ctx));
+
+	// Transfer direction selection - show token selection menu
+	handleCallback('transfer_direction_to_trading', (ctx) => transferService.showTokenSelectionMenu(ctx, 'to_trading'));
+	handleCallback('transfer_direction_from_trading', (ctx) => transferService.showTokenSelectionMenu(ctx, 'from_trading'));
+
+	// Token selection for to_trading
+	handleCallback('transfer_token_to_trading_bnb', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferToTradingMenu(ctx, COMMON_TOKENS.BNB);
+	});
+	handleCallback('transfer_token_to_trading_usdt', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferToTradingMenu(ctx, COMMON_TOKENS.USDT);
+	});
+	handleCallback('transfer_token_to_trading_usdc', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferToTradingMenu(ctx, COMMON_TOKENS.USDC);
+	});
+	handleCallback('transfer_token_to_trading_busd', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferToTradingMenu(ctx, COMMON_TOKENS.BUSD);
+	});
+	handleCallback('transfer_token_to_trading_cake', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferToTradingMenu(ctx, COMMON_TOKENS.CAKE);
+	});
+
+	// Token selection for from_trading
+	handleCallback('transfer_token_from_trading_bnb', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferFromTradingMenu(ctx, COMMON_TOKENS.BNB);
+	});
+	handleCallback('transfer_token_from_trading_usdt', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferFromTradingMenu(ctx, COMMON_TOKENS.USDT);
+	});
+	handleCallback('transfer_token_from_trading_usdc', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferFromTradingMenu(ctx, COMMON_TOKENS.USDC);
+	});
+	handleCallback('transfer_token_from_trading_busd', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferFromTradingMenu(ctx, COMMON_TOKENS.BUSD);
+	});
+	handleCallback('transfer_token_from_trading_cake', async (ctx) => {
+		const { COMMON_TOKENS } = await import('../../config/commonTokens');
+		await transferService.showTransferFromTradingMenu(ctx, COMMON_TOKENS.CAKE);
+	});
+
+	// Custom token handlers
+	handleCallback('transfer_custom_token_to_trading', (ctx) => transferService.handleCustomTokenInput(ctx, 'to_trading'));
+	handleCallback('transfer_custom_token_from_trading', (ctx) => transferService.handleCustomTokenInput(ctx, 'from_trading'));
+
+	// Main to Trading amount transfers - use pattern matching for dynamic amounts
+	bot.action(/^transfer_amount_to_(.+)$/,async (ctx) => {
+		const amount = ctx.match[1];
+		await transferService.handleTransferToTrading(ctx, amount);
+	});
+
+	// Trading to Main amount transfers - use pattern matching for dynamic amounts
+	bot.action(/^transfer_amount_from_(.+)$/, async (ctx) => {
+		const amount = ctx.match[1];
+		await transferService.handleTransferFromTrading(ctx, amount);
+	});
+	// Percentage transfers - Main to Trading
+	handleCallback('transfer_percent_to_25', async (ctx) => await handlePercentageTransfer(ctx, 'to', 0.25));
+	handleCallback('transfer_percent_to_50', async (ctx) => await handlePercentageTransfer(ctx, 'to', 0.50));
+	handleCallback('transfer_percent_to_75', async (ctx) => await handlePercentageTransfer(ctx, 'to', 0.75));
+	handleCallback('transfer_percent_to_100', async (ctx) => await handlePercentageTransfer(ctx, 'to', 1.00));
+
+	// Custom amount input - Main to Trading
+	handleCallback('transfer_custom_amount_to_trading', (ctx) => transferService.handleCustomTransferToTrading(ctx));
 	
-	// Transfer direction selection
-	handleCallback('transfer_to_trading', (ctx) => transferService.showTransferToTradingMenu(ctx));
-	handleCallback('transfer_from_trading', (ctx) => transferService.showTransferFromTradingMenu(ctx));
-	
-	// Main to Trading transfers
-	handleCallback('transfer_0.01', (ctx) => transferService.handleTransferToTrading(ctx, '0.01'));
-	handleCallback('transfer_0.05', (ctx) => transferService.handleTransferToTrading(ctx, '0.05'));
-	handleCallback('transfer_0.1', (ctx) => transferService.handleTransferToTrading(ctx, '0.1'));
-	handleCallback('transfer_0.5', (ctx) => transferService.handleTransferToTrading(ctx, '0.5'));
-	handleCallback('transfer_percent_25', async (ctx) => {
-		const userId = ctx.from!.id;
-		const session = global.userSessions.get(userId);
-		if (!session?.address) {
-			const msg = await getTranslation(ctx, 'common.mainWalletNotConnected');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const balance = await getBNBBalance(session.address);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = (balanceNum * 0.25).toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferToTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_percent_50', async (ctx) => {
-		const userId = ctx.from!.id;
-		const session = global.userSessions.get(userId);
-		if (!session?.address) {
-			const msg = await getTranslation(ctx, 'common.mainWalletNotConnected');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const balance = await getBNBBalance(session.address);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = (balanceNum * 0.50).toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferToTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_percent_75', async (ctx) => {
-		const userId = ctx.from!.id;
-		const session = global.userSessions.get(userId);
-		if (!session?.address) {
-			const msg = await getTranslation(ctx, 'common.mainWalletNotConnected');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const balance = await getBNBBalance(session.address);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = (balanceNum * 0.75).toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferToTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_percent_100', async (ctx) => {
-		const userId = ctx.from!.id;
-		const session = global.userSessions.get(userId);
-		if (!session?.address) {
-			const msg = await getTranslation(ctx, 'common.mainWalletNotConnected');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const balance = await getBNBBalance(session.address);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = balanceNum.toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferToTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_custom_to_trading', (ctx) => transferService.handleCustomTransferToTrading(ctx));
-	
-	// Trading to Main transfers
-	handleCallback('transfer_from_0.01', (ctx) => transferService.handleTransferFromTrading(ctx, '0.01'));
-	handleCallback('transfer_from_0.05', (ctx) => transferService.handleTransferFromTrading(ctx, '0.05'));
-	handleCallback('transfer_from_0.1', (ctx) => transferService.handleTransferFromTrading(ctx, '0.1'));
-	handleCallback('transfer_from_0.5', (ctx) => transferService.handleTransferFromTrading(ctx, '0.5'));
-	handleCallback('transfer_from_percent_25', async (ctx) => {
-		const userId = ctx.from!.id;
-		const { UserService } = await import('../../services/user');
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-		if (!tradingWalletAddress) {
-			const msg = await getTranslation(ctx, 'common.tradingWalletNotFound');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const balance = await getBNBBalance(tradingWalletAddress);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = (balanceNum * 0.25).toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferFromTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_from_percent_50', async (ctx) => {
-		const userId = ctx.from!.id;
-		const { UserService } = await import('../../services/user');
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-		if (!tradingWalletAddress) {
-			const msg = await getTranslation(ctx, 'common.tradingWalletNotFound');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const balance = await getBNBBalance(tradingWalletAddress);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = (balanceNum * 0.50).toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferFromTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_from_percent_75', async (ctx) => {
-		const userId = ctx.from!.id;
-		const { UserService } = await import('../../services/user');
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-		if (!tradingWalletAddress) {
-			const msg = await getTranslation(ctx, 'common.tradingWalletNotFound');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const balance = await getBNBBalance(tradingWalletAddress);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = (balanceNum * 0.75).toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferFromTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_from_percent_100', async (ctx) => {
-		const userId = ctx.from!.id;
-		const { UserService } = await import('../../services/user');
-		const { getBNBBalance } = await import('../../services/wallet/balance');
-		const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-		if (!tradingWalletAddress) {
-			const msg = await getTranslation(ctx, 'common.tradingWalletNotFound');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		const balance = await getBNBBalance(tradingWalletAddress);
-		const balanceNum = parseFloat(balance);
-		const transferAmount = balanceNum.toFixed(4);
-		if (parseFloat(transferAmount) < 0.001) {
-			const msg = await getTranslation(ctx, 'common.amountTooSmall');
-			await ctx.answerCbQuery(msg);
-			return;
-		}
-		return transferService.handleTransferFromTrading(ctx, transferAmount);
-	});
-	handleCallback('transfer_custom_from_trading', (ctx) => transferService.handleCustomTransferFromTrading(ctx));
+	// Percentage transfers - Trading to Main
+	handleCallback('transfer_percent_from_25', async (ctx) => await handlePercentageTransfer(ctx, 'from', 0.25));
+	handleCallback('transfer_percent_from_50', async (ctx) => await handlePercentageTransfer(ctx, 'from', 0.50));
+	handleCallback('transfer_percent_from_75', async (ctx) => await handlePercentageTransfer(ctx, 'from', 0.75));
+	handleCallback('transfer_percent_from_100', async (ctx) => await handlePercentageTransfer(ctx, 'from', 1.00));
+
+	// Custom amount input - Trading to Main
+	handleCallback('transfer_custom_amount_from_trading', (ctx) => transferService.handleCustomTransferFromTrading(ctx));
 
 	// Analytics actions
 	handleCallback('wallet_analytics', handleWalletAnalytics);
