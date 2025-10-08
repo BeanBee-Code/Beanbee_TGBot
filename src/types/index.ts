@@ -1,4 +1,5 @@
 import SignClient from "@walletconnect/sign-client";
+import type { TokenInfo } from "../config/commonTokens";
 
 export interface UserSession {
 	client?: SignClient;
@@ -39,8 +40,10 @@ export interface UserSession {
 	};
 	transfer?: {
 		waitingForAmountInput?: boolean;
+		waitingForCustomTokenAddress?: boolean;
 		direction?: 'to_trading' | 'from_trading';
 		backCallback?: string; // Store where user came from (e.g., 'honey_recharge', 'main_menu')
+		selectedToken?: TokenInfo; // Store the selected token for transfer
 	};
 	pendingTransfer?: {
 		amount: string;

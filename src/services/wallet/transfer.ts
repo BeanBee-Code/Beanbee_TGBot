@@ -4,40 +4,54 @@ import SignClient from '@walletconnect/sign-client';
 import { getTranslation } from '@/i18n';
 import { DeFiPosition } from '@/database/models/DeFiPosition';
 import { createLogger } from '@/utils/logger';
+import { COMMON_TOKENS, TokenInfo, isNativeBNB, getTokenByAddress } from '@/config/commonTokens';
+import {
+  getTokenBalance,
+  getTokenMetadata,
+  encodeTransferData,
+  formatTokenBalance,
+  isValidTokenAddress,
+  getMultipleTokenBalances,
+  executeERC20Transfer
+} from './erc20Transfer';
 
 const logger = createLogger('wallet.transfer');
 
 export class TransferService {
   /**
-   * Handle BNB transfer from main wallet to trading wallet
+   * Handle token transfer from main wallet to trading wallet
    * Supports both WalletConnect and web frontend connections
+   * Supports both native BNB and ERC20 tokens
    */
   async handleTransferToTrading(ctx: Context, amount: string, backCallback?: string) {
     const userId = ctx.from!.id;
     const session = global.userSessions.get(userId);
     const finalBackCallback = backCallback || session?.transfer?.backCallback || 'wallet_info';
-    
+
+    // Get selected token from session (defaults to BNB if not set)
+    const selectedToken = session?.transfer?.selectedToken || COMMON_TOKENS.BNB;
+
     // Check if user has an active WalletConnect session
     if (session?.client && session?.address) {
       // Execute WalletConnect flow
-      await this.handleWalletConnectTransfer(ctx, amount, session, finalBackCallback);
+      await this.handleWalletConnectTransfer(ctx, amount, session, finalBackCallback, selectedToken);
     } else {
       // Execute web frontend flow - generate task link
-      await this.handleWebFrontendTransfer(ctx, amount, finalBackCallback);
+      await this.handleWebFrontendTransfer(ctx, amount, finalBackCallback, selectedToken);
     }
   }
 
   /**
    * Handle transfer via WalletConnect session
    */
-  private async handleWalletConnectTransfer(ctx: Context, amount: string, session: any, backCallback: string) {
+  private async handleWalletConnectTransfer(ctx: Context, amount: string, session: any, backCallback: string, tokenInfo: TokenInfo) {
     const userId = ctx.from!.id;
-    logger.info('Executing transfer via WalletConnect session', { userId });
+    logger.info('Executing transfer via WalletConnect session', { userId, token: tokenInfo.symbol });
 
     // Import UserService
     const { UserService } = await import('../user');
     const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-    
+
     if (!tradingWalletAddress) {
       if (ctx.callbackQuery) {
         await ctx.answerCbQuery('Trading wallet not found');
@@ -51,14 +65,28 @@ export class TransferService {
       if (ctx.callbackQuery) {
         await ctx.answerCbQuery();
       }
-      
+
       // Create transaction request
-      const tx = {
-        from: session.address,
-        to: tradingWalletAddress,
-        value: ethers.toQuantity(ethers.parseEther(amount)), // Convert to hex format
-        data: '0x'
-      };
+      let tx: any;
+
+      if (isNativeBNB(tokenInfo.address)) {
+        // Native BNB transfer
+        tx = {
+          from: session.address,
+          to: tradingWalletAddress,
+          value: ethers.toQuantity(ethers.parseEther(amount)),
+          data: '0x'
+        };
+      } else {
+        // ERC20 token transfer
+        const transferData = encodeTransferData(tradingWalletAddress, amount, tokenInfo.decimals);
+        tx = {
+          from: session.address,
+          to: tokenInfo.address, // Contract address
+          value: '0x0', // No BNB value for token transfer
+          data: transferData
+        };
+      }
 
       // Get WalletConnect session from database
       const walletConnection = await UserService.getWalletConnection(userId);
@@ -93,9 +121,9 @@ export class TransferService {
         logger.warn('Session validation error, proceeding with transaction', { error });
       }
 
-      const processingMessage = 
-        `📤 *Transfer BNB to Trading Wallet*\n\n` +
-        `Amount: ${amount} BNB\n` +
+      const processingMessage =
+        `📤 *Transfer ${tokenInfo.symbol} to Trading Wallet*\n\n` +
+        `Amount: ${amount} ${tokenInfo.symbol}\n` +
         `From: \`${session.address.slice(0, 6)}...${session.address.slice(-4)}\`\n` +
         `To: \`${tradingWalletAddress.slice(0, 6)}...${tradingWalletAddress.slice(-4)}\`\n\n` +
         `⏳ Please confirm the transaction in your wallet...`;
@@ -133,13 +161,13 @@ export class TransferService {
       const txHashLabel = await getTranslation(ctx, 'transfer.transactionHash');
       const viewOnBscScan = await getTranslation(ctx, 'wallet.viewOnBscScan');
       // Determine button text based on where user came from
-      const backButtonText = backCallback === 'honey_recharge' 
+      const backButtonText = backCallback === 'honey_recharge'
         ? '🍯 Back to Buy Honey'
         : await getTranslation(ctx, 'transfer.backToWalletInfo');
-      
-      const successMessage = 
+
+      const successMessage =
         `${successTitle}\n\n` +
-        `${transferredMsg.replace('{amount}', amount)}\n\n` +
+        `${transferredMsg.replace('{amount}', `${amount} ${tokenInfo.symbol}`)}\n\n` +
         `${txHashLabel}:\n\`${result}\`\n\n` +
         `[${viewOnBscScan}](https://bscscan.com/tx/${result})`;
 
@@ -233,13 +261,13 @@ export class TransferService {
   /**
    * Handle transfer for web-connected users by generating task link
    */
-  private async handleWebFrontendTransfer(ctx: Context, amount: string, backCallback: string) {
+  private async handleWebFrontendTransfer(ctx: Context, amount: string, backCallback: string, tokenInfo: TokenInfo) {
     const userId = ctx.from!.id;
-    logger.info('Generating transfer task link for web-connected user', { userId });
-    
+    logger.info('Generating transfer task link for web-connected user', { userId, token: tokenInfo.symbol });
+
     const { UserService } = await import('../user');
     const { getUserLanguage } = await import('@/i18n');
-    
+
     const mainWalletAddress = await UserService.getMainWalletAddress(userId);
     if (!mainWalletAddress) {
       const errorMsg = 'Error: Your main wallet address is not registered. Please reconnect via the web page.';
@@ -250,7 +278,7 @@ export class TransferService {
       }
       return;
     }
-    
+
     const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
     if (!tradingWalletAddress) {
       const errorMsg = 'Error: Trading wallet not found.';
@@ -264,15 +292,15 @@ export class TransferService {
 
     // Import the generateTransferLink function
     const { generateTransferLink } = await import('../../api/server');
-    
+
     // Generate secure task link
-    const taskUrl = generateTransferLink(userId, tradingWalletAddress, amount, 'BNB', backCallback);
+    const taskUrl = generateTransferLink(userId, tradingWalletAddress, amount, tokenInfo.symbol, backCallback);
 
     // Get user language for localized messages
     const lang = await getUserLanguage(userId);
     const message = lang === 'zh'
-      ? `➡️ **确认转账**\n\n请点击下方按钮，在您的网页钱包中确认将 **${amount} BNB** 从您的主钱包转入交易钱包。`
-      : `➡️ **Confirm Transfer**\n\nPlease click the button below to confirm the transfer of **${amount} BNB** from your main wallet to your trading wallet in your web wallet.`;
+      ? `➡️ **确认转账**\n\n请点击下方按钮，在您的网页钱包中确认将 **${amount} ${tokenInfo.symbol}** 从您的主钱包转入交易钱包。`
+      : `➡️ **Confirm Transfer**\n\nPlease click the button below to confirm the transfer of **${amount} ${tokenInfo.symbol}** from your main wallet to your trading wallet in your web wallet.`;
 
     const keyboard = {
       inline_keyboard: [
@@ -291,38 +319,42 @@ export class TransferService {
   }
 
   /**
-   * Handle BNB transfer from trading wallet to main wallet
+   * Handle token transfer from trading wallet to main wallet
    * Supports both WalletConnect and web frontend connections
+   * Supports both native BNB and ERC20 tokens
    */
   async handleTransferFromTrading(ctx: Context, amount: string, backCallback?: string) {
     const userId = ctx.from!.id;
     const session = global.userSessions.get(userId);
     const finalBackCallback = backCallback || session?.transfer?.backCallback || 'wallet_info';
-    
+
+    // Get selected token from session (defaults to BNB if not set)
+    const selectedToken = session?.transfer?.selectedToken || COMMON_TOKENS.BNB;
+
     // Check if user has an active WalletConnect session
     if (session?.client && session?.address) {
       // Execute WalletConnect flow
-      await this.handleWalletConnectTransferFromTrading(ctx, amount, session, finalBackCallback);
+      await this.handleWalletConnectTransferFromTrading(ctx, amount, session, finalBackCallback, selectedToken);
     } else {
       // Execute web frontend flow for web-connected users
-      await this.handleWebFrontendTransferFromTrading(ctx, amount, finalBackCallback);
+      await this.handleWebFrontendTransferFromTrading(ctx, amount, finalBackCallback, selectedToken);
     }
   }
 
   /**
    * Handle transfer from trading to main via WalletConnect session
    */
-  private async handleWalletConnectTransferFromTrading(ctx: Context, amount: string, session: any, backCallback: string) {
+  private async handleWalletConnectTransferFromTrading(ctx: Context, amount: string, session: any, backCallback: string, tokenInfo: TokenInfo) {
     const userId = ctx.from!.id;
-    logger.info('Executing transfer from trading via WalletConnect', { userId });
+    logger.info('Executing transfer from trading via WalletConnect', { userId, token: tokenInfo.symbol });
 
     // Import UserService
     const { UserService } = await import('../user');
     const { getTradingWallet } = await import('./tradingWallet');
-    
+
     const tradingWalletData = await UserService.getTradingWalletData(userId);
     const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-    
+
     if (!tradingWalletData || !tradingWalletAddress) {
       if (ctx.callbackQuery) {
         await ctx.answerCbQuery('Trading wallet not found');
@@ -336,32 +368,46 @@ export class TransferService {
       if (ctx.callbackQuery) {
         await ctx.answerCbQuery();
       }
-      
+
       // Get provider
       const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org/');
-      
+
       // Get trading wallet instance
       const tradingWallet = getTradingWallet(
         tradingWalletData.encryptedPrivateKey,
         tradingWalletData.iv,
         provider
       );
-      
-      // Create transaction
-      const tx = await tradingWallet.sendTransaction({
-        to: session.address,
-        value: ethers.parseEther(amount)
-      });
+
+      // Execute transfer
+      let tx: ethers.TransactionResponse;
+
+      if (isNativeBNB(tokenInfo.address)) {
+        // Native BNB transfer
+        tx = await tradingWallet.sendTransaction({
+          to: session.address,
+          value: ethers.parseEther(amount)
+        });
+      } else {
+        // ERC20 token transfer
+        tx = await executeERC20Transfer(
+          tokenInfo.address,
+          session.address,
+          amount,
+          tokenInfo.decimals,
+          tradingWallet
+        );
+      }
 
       const transferTitle = await getTranslation(ctx, 'transfer.fromTradingTitle');
       const amountLabel = await getTranslation(ctx, 'transfer.amount');
       const fromLabel = await getTranslation(ctx, 'transfer.from');
       const toLabel = await getTranslation(ctx, 'transfer.to');
       const transactionSubmitted = await getTranslation(ctx, 'transfer.transactionSubmitted');
-      
-      const processingMessage = 
+
+      const processingMessage =
         `${transferTitle}\n\n` +
-        `${amountLabel}: ${amount} BNB\n` +
+        `${amountLabel}: ${amount} ${tokenInfo.symbol}\n` +
         `${fromLabel}: \`${tradingWalletAddress.slice(0, 6)}...${tradingWalletAddress.slice(-4)}\`\n` +
         `${toLabel}: \`${session.address.slice(0, 6)}...${session.address.slice(-4)}\`\n\n` +
         `${transactionSubmitted}`;
@@ -374,7 +420,7 @@ export class TransferService {
 
       // Wait for confirmation
       const receipt = await tx.wait();
-      
+
       // Invalidate DeFi cache for both wallets after successful transfer
       await DeFiPosition.updateMany(
         {
@@ -393,13 +439,13 @@ export class TransferService {
       const txHashLabel = await getTranslation(ctx, 'transfer.transactionHash');
       const viewOnBscScan = await getTranslation(ctx, 'wallet.viewOnBscScan');
       // Determine button text based on where user came from
-      const backButtonText = backCallback === 'honey_recharge' 
+      const backButtonText = backCallback === 'honey_recharge'
         ? '🍯 Back to Buy Honey'
         : await getTranslation(ctx, 'transfer.backToWalletInfo');
-      
-      const successMessage = 
+
+      const successMessage =
         `${successTitle}\n\n` +
-        `${transferredMsg.replace('{amount}', amount)}\n\n` +
+        `${transferredMsg.replace('{amount}', `${amount} ${tokenInfo.symbol}`)}\n\n` +
         `${txHashLabel}:\n\`${receipt!.hash}\`\n\n` +
         `[${viewOnBscScan}](https://bscscan.com/tx/${receipt!.hash})`;
 
@@ -454,13 +500,13 @@ export class TransferService {
    * Handle transfer from trading to main for web-connected users
    * This executes the transfer directly from the trading wallet
    */
-  private async handleWebFrontendTransferFromTrading(ctx: Context, amount: string, backCallback: string) {
+  private async handleWebFrontendTransferFromTrading(ctx: Context, amount: string, backCallback: string, tokenInfo: TokenInfo) {
     const userId = ctx.from!.id;
-    logger.info('Executing transfer from trading for web-connected user', { userId });
-    
+    logger.info('Executing transfer from trading for web-connected user', { userId, token: tokenInfo.symbol });
+
     const { UserService } = await import('../user');
     const { getTradingWallet } = await import('./tradingWallet');
-    
+
     // Get main wallet address from database
     const mainWalletAddress = await UserService.getMainWalletAddress(userId);
     if (!mainWalletAddress) {
@@ -472,11 +518,11 @@ export class TransferService {
       }
       return;
     }
-    
+
     // Get trading wallet data
     const tradingWalletData = await UserService.getTradingWalletData(userId);
     const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-    
+
     if (!tradingWalletData || !tradingWalletAddress) {
       const errorMsg = 'Error: Trading wallet not found.';
       if (ctx.callbackQuery?.message) {
@@ -491,32 +537,46 @@ export class TransferService {
       if (ctx.callbackQuery) {
         await ctx.answerCbQuery();
       }
-      
+
       // Get provider
       const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org/');
-      
+
       // Get trading wallet instance
       const tradingWallet = getTradingWallet(
         tradingWalletData.encryptedPrivateKey,
         tradingWalletData.iv,
         provider
       );
-      
-      // Create transaction from trading wallet to main wallet
-      const tx = await tradingWallet.sendTransaction({
-        to: mainWalletAddress,
-        value: ethers.parseEther(amount)
-      });
+
+      // Execute transfer
+      let tx: ethers.TransactionResponse;
+
+      if (isNativeBNB(tokenInfo.address)) {
+        // Native BNB transfer
+        tx = await tradingWallet.sendTransaction({
+          to: mainWalletAddress,
+          value: ethers.parseEther(amount)
+        });
+      } else {
+        // ERC20 token transfer
+        tx = await executeERC20Transfer(
+          tokenInfo.address,
+          mainWalletAddress,
+          amount,
+          tokenInfo.decimals,
+          tradingWallet
+        );
+      }
 
       const transferTitle = await getTranslation(ctx, 'transfer.fromTradingTitle');
       const amountLabel = await getTranslation(ctx, 'transfer.amount');
       const fromLabel = await getTranslation(ctx, 'transfer.from');
       const toLabel = await getTranslation(ctx, 'transfer.to');
       const transactionSubmitted = await getTranslation(ctx, 'transfer.transactionSubmitted');
-      
-      const processingMessage = 
+
+      const processingMessage =
         `${transferTitle}\n\n` +
-        `${amountLabel}: ${amount} BNB\n` +
+        `${amountLabel}: ${amount} ${tokenInfo.symbol}\n` +
         `${fromLabel}: \`${tradingWalletAddress.slice(0, 6)}...${tradingWalletAddress.slice(-4)}\`\n` +
         `${toLabel}: \`${mainWalletAddress.slice(0, 6)}...${mainWalletAddress.slice(-4)}\`\n\n` +
         `${transactionSubmitted}`;
@@ -529,7 +589,7 @@ export class TransferService {
 
       // Wait for confirmation
       const receipt = await tx.wait();
-      
+
       // Invalidate DeFi cache for both wallets after successful transfer
       await DeFiPosition.updateMany(
         {
@@ -548,13 +608,13 @@ export class TransferService {
       const txHashLabel = await getTranslation(ctx, 'transfer.transactionHash');
       const viewOnBscScan = await getTranslation(ctx, 'wallet.viewOnBscScan');
       // Determine button text based on where user came from
-      const backButtonText = backCallback === 'honey_recharge' 
+      const backButtonText = backCallback === 'honey_recharge'
         ? '🍯 Back to Buy Honey'
         : await getTranslation(ctx, 'transfer.backToWalletInfo');
-      
-      const successMessage = 
+
+      const successMessage =
         `${successTitle}\n\n` +
-        `${transferredMsg.replace('{amount}', amount)}\n\n` +
+        `${transferredMsg.replace('{amount}', `${amount} ${tokenInfo.symbol}`)}\n\n` +
         `${txHashLabel}:\n\`${receipt!.hash}\`\n\n` +
         `[${viewOnBscScan}](https://bscscan.com/tx/${receipt!.hash})`;
 
@@ -606,18 +666,59 @@ export class TransferService {
   }
 
   /**
+   * Show token selection menu
+   */
+  async showTokenSelectionMenu(ctx: Context, direction: 'to_trading' | 'from_trading') {
+    const userId = ctx.from!.id;
+    await ctx.answerCbQuery();
+
+    // Get translations
+    const selectToken = await getTranslation(ctx, 'transfer.selectToken');
+    const customToken = await getTranslation(ctx, 'transfer.customToken');
+    const cancel = await getTranslation(ctx, 'common.cancel');
+
+    // Build keyboard with common tokens
+    const tokenButtons = Object.values(COMMON_TOKENS).map(token => ({
+      text: `${token.emoji || ''} ${token.symbol}`,
+      callback_data: `transfer_token_${direction}_${token.symbol.toLowerCase()}`
+    }));
+
+    // Group tokens into rows of 2
+    const tokenRows = [];
+    for (let i = 0; i < tokenButtons.length; i += 2) {
+      tokenRows.push(tokenButtons.slice(i, i + 2));
+    }
+
+    const keyboard = {
+      inline_keyboard: [
+        ...tokenRows,
+        [{ text: `✏️ ${customToken}`, callback_data: `transfer_custom_token_${direction}` }],
+        [{ text: '🔙 ' + cancel, callback_data: 'wallet_info' }]
+      ]
+    };
+
+    await ctx.editMessageText(
+      selectToken,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      }
+    );
+  }
+
+  /**
    * Show transfer direction selection menu
    */
   async showTransferMenu(ctx: Context) {
     const userId = ctx.from!.id;
     const session = global.userSessions.get(userId);
-    
+
     // Check if user has any wallet connected (WalletConnect or web frontend)
     if (!session?.address) {
       // Check if user has web-connected wallet
       const { UserService } = await import('../user');
       const mainWalletAddress = await UserService.getMainWalletAddress(userId);
-      
+
       if (!mainWalletAddress) {
         const noWalletMsg = await getTranslation(ctx, 'wallet.noWalletConnected');
         await ctx.answerCbQuery(noWalletMsg);
@@ -636,8 +737,8 @@ export class TransferService {
 
     const keyboard = {
       inline_keyboard: [
-        [{ text: toTrading, callback_data: 'transfer_to_trading' }],
-        [{ text: fromTrading, callback_data: 'transfer_from_trading' }],
+        [{ text: toTrading, callback_data: 'transfer_direction_to_trading' }],
+        [{ text: fromTrading, callback_data: 'transfer_direction_from_trading' }],
         [{ text: '🔙 ' + cancel, callback_data: 'wallet_info' }]
       ]
     };
@@ -654,50 +755,71 @@ export class TransferService {
   /**
    * Show transfer amount selection menu for Main to Trading
    * @param ctx - Telegraf context
+   * @param tokenInfo - Token to transfer
    * @param backCallback - Optional callback data for the back button (defaults to 'transfer_menu')
    */
-  async showTransferToTradingMenu(ctx: Context, backCallback: string = 'transfer_menu') {
+  async showTransferToTradingMenu(ctx: Context, tokenInfo: TokenInfo, backCallback: string = 'transfer_menu') {
     const userId = ctx.from!.id;
 
-    // Store the back callback in the session
+    // Store the token and back callback in the session
     const sessionForCallback = global.userSessions.get(userId);
     if (sessionForCallback) {
         if (!sessionForCallback.transfer) sessionForCallback.transfer = {};
         sessionForCallback.transfer.backCallback = backCallback;
+        sessionForCallback.transfer.selectedToken = tokenInfo;
     }
     const session = global.userSessions.get(userId);
-    
+
     // Get main wallet address - either from session or database
     let mainWalletAddress = session?.address;
-    
+
     if (!mainWalletAddress) {
       // Check if user has web-connected wallet
       const { UserService } = await import('../user');
       mainWalletAddress = await UserService.getMainWalletAddress(userId);
-      
+
       if (!mainWalletAddress) {
         const noWalletMsg = await getTranslation(ctx, 'wallet.noWalletConnected');
-        await ctx.answerCbQuery(noWalletMsg);
+        // Only answer callback query if this is a callback context
+        if (ctx.callbackQuery) {
+          await ctx.answerCbQuery(noWalletMsg);
+        } else {
+          await ctx.reply(noWalletMsg);
+        }
         return;
       }
     }
 
     // Import services
     const { UserService } = await import('../user');
-    const { getBNBBalance, formatBNBBalance } = await import('./balance');
-    
+
     const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
     if (!tradingWalletAddress) {
       const noTradingMsg = await getTranslation(ctx, 'wallet.noTradingWallet');
-      await ctx.answerCbQuery(noTradingMsg);
+      // Only answer callback query if this is a callback context
+      if (ctx.callbackQuery) {
+        await ctx.answerCbQuery(noTradingMsg);
+      } else {
+        await ctx.reply(noTradingMsg);
+      }
       return;
     }
 
-    // Get main wallet balance using the address we found
-    const mainBalance = await getBNBBalance(mainWalletAddress);
-    
+    // Get main wallet balance
+    let mainBalance: string;
+    if (isNativeBNB(tokenInfo.address)) {
+      const { getBNBBalance } = await import('./balance');
+      mainBalance = await getBNBBalance(mainWalletAddress);
+    } else {
+      // ERC20 token balance
+      const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org/');
+      mainBalance = await getTokenBalance(tokenInfo.address, mainWalletAddress, provider);
+    }
 
-    await ctx.answerCbQuery();
+    // Only answer callback query if this is a callback context
+    if (ctx.callbackQuery) {
+      await ctx.answerCbQuery();
+    }
 
     // Get translations
     const title = await getTranslation(ctx, 'transfer.title');
@@ -707,88 +829,125 @@ export class TransferService {
     const customAmount = await getTranslation(ctx, 'transfer.customAmount');
     const cancel = await getTranslation(ctx, 'common.cancel');
 
+    // Create quick amount buttons based on token
+    const quickAmounts = isNativeBNB(tokenInfo.address)
+      ? ['0.01', '0.05', '0.1', '0.5']
+      : tokenInfo.symbol === 'USDT' || tokenInfo.symbol === 'USDC' || tokenInfo.symbol === 'BUSD'
+      ? ['10', '50', '100', '500']
+      : ['0.1', '0.5', '1', '5'];
+
     const keyboard = {
       inline_keyboard: [
         // Quick transfer amounts
         [
-          { text: '0.01 BNB', callback_data: 'transfer_0.01' },
-          { text: '0.05 BNB', callback_data: 'transfer_0.05' },
-          { text: '0.1 BNB', callback_data: 'transfer_0.1' },
-          { text: '0.5 BNB', callback_data: 'transfer_0.5' }
+          { text: `${quickAmounts[0]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_to_${quickAmounts[0]}` },
+          { text: `${quickAmounts[1]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_to_${quickAmounts[1]}` },
+          { text: `${quickAmounts[2]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_to_${quickAmounts[2]}` },
+          { text: `${quickAmounts[3]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_to_${quickAmounts[3]}` }
         ],
         // Percentage buttons
         [
-          { text: '25%', callback_data: 'transfer_percent_25' },
-          { text: '50%', callback_data: 'transfer_percent_50' },
-          { text: '75%', callback_data: 'transfer_percent_75' },
-          { text: '100%', callback_data: 'transfer_percent_100' }
+          { text: '25%', callback_data: 'transfer_percent_to_25' },
+          { text: '50%', callback_data: 'transfer_percent_to_50' },
+          { text: '75%', callback_data: 'transfer_percent_to_75' },
+          { text: '100%', callback_data: 'transfer_percent_to_100' }
         ],
         [
-          { text: customAmount, callback_data: 'transfer_custom_to_trading' }
+          { text: customAmount, callback_data: 'transfer_custom_amount_to_trading' }
         ],
         [{ text: '🔙 ' + cancel, callback_data: backCallback }]
       ]
     };
 
-    await ctx.editMessageText(
+    const message =
       `${title} ${toTradingText}\n\n` +
-      `${availableBalance} ${formatBNBBalance(mainBalance)} BNB\n\n` +
-      `${selectAmount}`,
-      {
+      `${tokenInfo.emoji || ''} *${tokenInfo.symbol}*\n` +
+      `${availableBalance} ${formatTokenBalance(mainBalance)} ${tokenInfo.symbol}\n\n` +
+      `${selectAmount}`;
+
+    // Use editMessageText for callback queries, reply for regular messages
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(message, {
         parse_mode: 'Markdown',
         reply_markup: keyboard
-      }
-    );
+      });
+    } else {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
+    }
   }
 
   /**
    * Show transfer amount selection menu for Trading to Main
    * @param ctx - Telegraf context
+   * @param tokenInfo - Token to transfer
    * @param backCallback - Optional callback data for the back button (defaults to 'transfer_menu')
    */
-  async showTransferFromTradingMenu(ctx: Context, backCallback: string = 'transfer_menu') {
+  async showTransferFromTradingMenu(ctx: Context, tokenInfo: TokenInfo, backCallback: string = 'transfer_menu') {
     const userId = ctx.from!.id;
 
-    // Store the back callback in the session
+    // Store the token and back callback in the session
     const sessionForCallback = global.userSessions.get(userId);
     if (sessionForCallback) {
         if (!sessionForCallback.transfer) sessionForCallback.transfer = {};
         sessionForCallback.transfer.backCallback = backCallback;
+        sessionForCallback.transfer.selectedToken = tokenInfo;
     }
 
     const session = global.userSessions.get(userId);
-    
+
     // Get main wallet address - either from session or database
     let mainWalletAddress = session?.address;
-    
+
     if (!mainWalletAddress) {
       // Check if user has web-connected wallet
       const { UserService } = await import('../user');
       mainWalletAddress = await UserService.getMainWalletAddress(userId);
-      
+
       if (!mainWalletAddress) {
         const noWalletMsg = await getTranslation(ctx, 'wallet.noWalletConnected');
-        await ctx.answerCbQuery(noWalletMsg);
+        // Only answer callback query if this is a callback context
+        if (ctx.callbackQuery) {
+          await ctx.answerCbQuery(noWalletMsg);
+        } else {
+          await ctx.reply(noWalletMsg);
+        }
         return;
       }
     }
 
     // Import services
     const { UserService } = await import('../user');
-    const { getBNBBalance, formatBNBBalance } = await import('./balance');
-    
+
     const tradingWalletAddress = await UserService.getTradingWalletAddress(userId);
     if (!tradingWalletAddress) {
       const noTradingMsg = await getTranslation(ctx, 'wallet.noTradingWallet');
-      await ctx.answerCbQuery(noTradingMsg);
+      // Only answer callback query if this is a callback context
+      if (ctx.callbackQuery) {
+        await ctx.answerCbQuery(noTradingMsg);
+      } else {
+        await ctx.reply(noTradingMsg);
+      }
       return;
     }
 
     // Get trading wallet balance
-    const tradingBalance = await getBNBBalance(tradingWalletAddress);
-    
+    let tradingBalance: string;
+    if (isNativeBNB(tokenInfo.address)) {
+      const { getBNBBalance } = await import('./balance');
+      tradingBalance = await getBNBBalance(tradingWalletAddress);
+    } else {
+      // ERC20 token balance
+      const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org/');
+      tradingBalance = await getTokenBalance(tokenInfo.address, tradingWalletAddress, provider);
+    }
 
-    await ctx.answerCbQuery();
+    // Only answer callback query if this is a callback context
+    if (ctx.callbackQuery) {
+      await ctx.answerCbQuery();
+    }
 
     // Get translations
     const title = await getTranslation(ctx, 'transfer.title');
@@ -798,38 +957,54 @@ export class TransferService {
     const customAmount = await getTranslation(ctx, 'transfer.customAmount');
     const cancel = await getTranslation(ctx, 'common.cancel');
 
+    // Create quick amount buttons based on token
+    const quickAmounts = isNativeBNB(tokenInfo.address)
+      ? ['0.01', '0.05', '0.1', '0.5']
+      : tokenInfo.symbol === 'USDT' || tokenInfo.symbol === 'USDC' || tokenInfo.symbol === 'BUSD'
+      ? ['10', '50', '100', '500']
+      : ['0.1', '0.5', '1', '5'];
+
     const keyboard = {
       inline_keyboard: [
         // Quick transfer amounts
         [
-          { text: '0.01 BNB', callback_data: 'transfer_from_0.01' },
-          { text: '0.05 BNB', callback_data: 'transfer_from_0.05' },
-          { text: '0.1 BNB', callback_data: 'transfer_from_0.1' },
-          { text: '0.5 BNB', callback_data: 'transfer_from_0.5' }
+          { text: `${quickAmounts[0]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_from_${quickAmounts[0]}` },
+          { text: `${quickAmounts[1]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_from_${quickAmounts[1]}` },
+          { text: `${quickAmounts[2]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_from_${quickAmounts[2]}` },
+          { text: `${quickAmounts[3]} ${tokenInfo.symbol}`, callback_data: `transfer_amount_from_${quickAmounts[3]}` }
         ],
         // Percentage buttons
         [
-          { text: '25%', callback_data: 'transfer_from_percent_25' },
-          { text: '50%', callback_data: 'transfer_from_percent_50' },
-          { text: '75%', callback_data: 'transfer_from_percent_75' },
-          { text: '100%', callback_data: 'transfer_from_percent_100' }
+          { text: '25%', callback_data: 'transfer_percent_from_25' },
+          { text: '50%', callback_data: 'transfer_percent_from_50' },
+          { text: '75%', callback_data: 'transfer_percent_from_75' },
+          { text: '100%', callback_data: 'transfer_percent_from_100' }
         ],
         [
-          { text: customAmount, callback_data: 'transfer_custom_from_trading' }
+          { text: customAmount, callback_data: 'transfer_custom_amount_from_trading' }
         ],
         [{ text: '🔙 ' + cancel, callback_data: backCallback }]
       ]
     };
 
-    await ctx.editMessageText(
+    const message =
       `${title} ${fromTradingText}\n\n` +
-      `${availableBalance} ${formatBNBBalance(tradingBalance)} BNB\n\n` +
-      `${selectAmount}`,
-      {
+      `${tokenInfo.emoji || ''} *${tokenInfo.symbol}*\n` +
+      `${availableBalance} ${formatTokenBalance(tradingBalance)} ${tokenInfo.symbol}\n\n` +
+      `${selectAmount}`;
+
+    // Use editMessageText for callback queries, reply for regular messages
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(message, {
         parse_mode: 'Markdown',
         reply_markup: keyboard
-      }
-    );
+      });
+    } else {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
+    }
   }
 
   /**
@@ -949,10 +1124,127 @@ export class TransferService {
     session.transfer.waitingForAmountInput = true;
     session.transfer.direction = 'from_trading';
 
+    // Get selected token symbol from session
+    const selectedToken = session.transfer.selectedToken || COMMON_TOKENS.BNB;
+
     await ctx.reply(
-      '💰 Please enter the amount of BNB you want to transfer to your main wallet:\n\n' +
-      'Example: `0.5` for 0.5 BNB',
+      `💰 Please enter the amount of ${selectedToken.symbol} you want to transfer to your main wallet:\n\n` +
+      `Example: \`0.5\` for 0.5 ${selectedToken.symbol}`,
       { parse_mode: 'Markdown' }
     );
+  }
+
+  /**
+   * Handle custom token address input
+   */
+  async handleCustomTokenInput(ctx: Context, direction: 'to_trading' | 'from_trading') {
+    await ctx.answerCbQuery();
+    const userId = ctx.from!.id;
+    let session = global.userSessions.get(userId);
+
+    // Create session if it doesn't exist
+    if (!session) {
+      session = {
+        transfer: {}
+      };
+      global.userSessions.set(userId, session);
+    }
+
+    if (!session.transfer) {
+      session.transfer = {};
+    }
+
+    session.transfer.waitingForCustomTokenAddress = true;
+    session.transfer.direction = direction;
+
+    const enterTokenAddress = await getTranslation(ctx, 'transfer.enterTokenAddress');
+    const cancel = await getTranslation(ctx, 'common.cancel');
+
+    await ctx.reply(
+      `${enterTokenAddress}\n\n` +
+      'Example: `0x55d398326f99059fF775485246999027B3197955` (USDT)',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 ' + cancel, callback_data: 'wallet_info' }]
+          ]
+        }
+      }
+    );
+  }
+
+  /**
+   * Process custom token address and show amount selection
+   */
+  async processCustomTokenAddress(ctx: Context, tokenAddress: string) {
+    const userId = ctx.from!.id;
+    const session = global.userSessions.get(userId);
+
+    if (!session?.transfer?.direction) {
+      await ctx.reply('❌ Error: Transfer direction not set. Please start over.');
+      return;
+    }
+
+    const direction = session.transfer.direction;
+
+    // Validate token address format
+    if (!isValidTokenAddress(tokenAddress)) {
+      const invalidTokenAddress = await getTranslation(ctx, 'transfer.invalidTokenAddress');
+      await ctx.reply(invalidTokenAddress);
+      return;
+    }
+
+    try {
+      // Show loading message
+      const loadingMsg = await ctx.reply('🔍 Fetching token information...');
+
+      // Get token metadata
+      const provider = new ethers.JsonRpcProvider(process.env.BSC_RPC_URL || 'https://bsc-dataseed1.binance.org/');
+      const metadata = await getTokenMetadata(tokenAddress, provider);
+
+      // Create token info object
+      const tokenInfo: TokenInfo = {
+        address: tokenAddress,
+        symbol: metadata.symbol,
+        name: metadata.name,
+        decimals: metadata.decimals
+      };
+
+      // Delete loading message
+      try {
+        await ctx.deleteMessage(loadingMsg.message_id);
+      } catch (e) {
+        // Ignore deletion errors
+      }
+
+      // Store token in session
+      if (!session.transfer) {
+        session.transfer = {};
+      }
+      session.transfer.selectedToken = tokenInfo;
+      session.transfer.waitingForCustomTokenAddress = false;
+
+      // Show amount selection menu
+      if (direction === 'to_trading') {
+        await this.showTransferToTradingMenu(ctx, tokenInfo);
+      } else {
+        await this.showTransferFromTradingMenu(ctx, tokenInfo);
+      }
+    } catch (error) {
+      logger.error('Error fetching custom token metadata', { tokenAddress, error });
+
+      const cancel = await getTranslation(ctx, 'common.cancel');
+      await ctx.reply(
+        '❌ Failed to fetch token information. Please make sure the address is correct and try again.',
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔙 ' + cancel, callback_data: 'wallet_info' }]
+            ]
+          }
+        }
+      );
+    }
   }
 }

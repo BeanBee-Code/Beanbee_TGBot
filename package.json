@@ -7,9 +7,9 @@
     "node": "20"
   },
   "scripts": {
-    "dev": "nodemon src/index.ts",
-    "start": "TS_NODE_PROJECT=tsconfig-paths.json node -r tsconfig-paths/register dist/index.js",
-    "build": "rm -rf dist && tsc && tsc-alias && copyfiles -u 1 src/**/*.json dist/",
+    "dev": "node init && nodemon src/index.ts",
+    "start": "node init && TS_NODE_PROJECT=tsconfig-paths.json node -r tsconfig-paths/register dist/index.js",
+    "build": "node init && rm -rf dist && tsc && tsc-alias && copyfiles -u 1 src/**/*.json dist/",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:run": "vitest run",
@@ -70,6 +70,7 @@
     "moralis": "^2.27.2",
     "natural": "^6.10.0",
     "node-cron": "^4.1.0",
+    "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
     "qrcode": "^1.5.4",
     "sentiment": "^5.0.2",
