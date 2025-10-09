@@ -319,6 +319,12 @@ export function setupMessages(
 				return;
 			}
 
+			// Check if waiting for custom token address input
+			if (session?.transfer?.waitingForCustomTokenAddress) {
+				await transferService.processCustomTokenAddress(ctx, text.trim());
+				return;
+			}
+
 			// Check if waiting for transfer amount input
 			if (session?.transfer?.waitingForAmountInput) {
 				await handleTransferAmountInput(ctx, text, transferService);
