@@ -92,15 +92,18 @@ export class RugAlertsService {
   }
 
   generateNaturalSummary(analysis: RugAlertAnalysis, lang: Language = 'en'): string {
-    const { metadata, holderAnalysis, liquidityAnalysis, tradingActivity, honeypotAnalysis, safetyScore } = analysis;
-    
+    const { metadata, holderAnalysis, liquidityAnalysis, tradingActivity, honeypotAnalysis, safetyScore, scSecurityAnalysis } = analysis;
+
     let summary = '';
-    
+
     // Start with token name and overall assessment
     const safetyLevel = this.getSafetyLevel(safetyScore);
     const safetyEmoji = this.getSafetyEmoji(safetyScore);
-    
-    if (honeypotAnalysis.isHoneypot) {
+
+    // Check for critical SC vulnerabilities first
+    if (scSecurityAnalysis && scSecurityAnalysis.hasData && scSecurityAnalysis.securityIssues.critical.length > 0) {
+      summary = `🚨 **CRITICAL SECURITY WARNING**: ${metadata.name} (${metadata.symbol}) has ${scSecurityAnalysis.securityIssues.critical.length} critical smart contract vulnerabilit${scSecurityAnalysis.securityIssues.critical.length > 1 ? 'ies' : 'y'}! This token may be unsafe to trade.\n\n`;
+    } else if (honeypotAnalysis.isHoneypot) {
       summary = `🚫 **WARNING**: ${metadata.name} (${metadata.symbol}) is a HONEYPOT! You cannot sell this token after buying. Do NOT invest in this token.\n\n`;
     } else if (safetyScore >= 70) {
       summary = `${safetyEmoji} ${metadata.name} (${metadata.symbol}) appears to be relatively safe with a score of ${safetyScore}/100. `;
@@ -291,14 +294,9 @@ export class RugAlertsService {
     message += `${safetyEmoji} ${safetyScore}/100 (${safetyLevel})\n\n`;
     
     message += `📊 *Safety Breakdown:*\n`;
-    message += `• Holder Distribution: ${safetyScoreDetails.holders}/15\n`;
-    message += `• Liquidity Security: ${safetyScoreDetails.liquidity}/25\n`;
-    message += `• Contract Verification: ${safetyScoreDetails.verification}/10\n`;
-    message += `• Ownership Status: ${safetyScoreDetails.ownership}/10\n`;
-    message += `• Trading Activity: ${safetyScoreDetails.trading}/10\n`;
-    message += `• Token Age: ${safetyScoreDetails.age}/10\n`;
-    message += `• Honeypot Check: ${safetyScoreDetails.honeypot}/15\n`;
-    message += `• Diamond Hands: ${(safetyScoreDetails as any).diamondHands || 0}/5\n`;
+    message += `• Holders: ${safetyScoreDetails.holders}/15 • Liquidity: ${safetyScoreDetails.liquidity}/20 • Verification: ${safetyScoreDetails.verification}/10\n`;
+    message += `• Ownership: ${safetyScoreDetails.ownership}/10 • Trading: ${safetyScoreDetails.trading}/10 • Age: ${safetyScoreDetails.age}/10\n`;
+    message += `• Honeypot: ${safetyScoreDetails.honeypot}/10 • Diamond Hands: ${safetyScoreDetails.diamondHands || 0}/5\n`;
     message += `\n`;
 
     // Swap Analysis Section
@@ -325,6 +323,48 @@ export class RugAlertsService {
       }
     }
     message += `\n`;
+
+    // Smart Contract Security Section (HAPI Labs)
+    if (analysis.scSecurityAnalysis && analysis.scSecurityAnalysis.hasData) {
+      const scAnalysis = analysis.scSecurityAnalysis;
+
+      // Overall SC risk level with score
+      const scRiskEmoji = scAnalysis.riskLevel === 'SAFE' ? '✅' :
+                          scAnalysis.riskLevel === 'LOW' ? '🟢' :
+                          scAnalysis.riskLevel === 'MEDIUM' ? '🟡' :
+                          scAnalysis.riskLevel === 'HIGH' ? '🟠' : '🔴';
+
+      message += `🛡️ *SMART CONTRACT SECURITY* (HAPI Labs)\n`;
+      message += `${scRiskEmoji} ${scAnalysis.riskLevel} — ${scAnalysis.securityScore}/15\n`;
+
+      // Critical vulnerabilities
+      if (scAnalysis.securityIssues.critical.length > 0) {
+        message += `\n🚨 *CRITICAL:* ${scAnalysis.securityIssues.critical.map((i: string) => i.split(':')[0]).join(', ')}\n`;
+      }
+
+      // High-risk patterns
+      if (scAnalysis.securityIssues.high.length > 0) {
+        const highRiskNames = scAnalysis.securityIssues.high.slice(0, 3).map((i: string) => i.split(':')[0]);
+        const remaining = scAnalysis.securityIssues.high.length - 3;
+        message += `⚠️ *High-Risk:* ${highRiskNames.join(', ')}${remaining > 0 ? ` (+${remaining} more)` : ''}\n`;
+      }
+
+      // Medium-risk issues (condensed)
+      if (scAnalysis.securityIssues.medium.length > 0) {
+        message += `ℹ️ *Medium-Risk:* ${scAnalysis.securityIssues.medium.length} detected\n`;
+      }
+
+      // Positive security features (only if no critical issues)
+      if (scAnalysis.positiveFeatures.length > 0 && scAnalysis.securityIssues.critical.length === 0 && scAnalysis.securityIssues.high.length === 0) {
+        message += `✅ ${scAnalysis.positiveFeatures.slice(0, 2).join(' • ')}\n`;
+      }
+
+      message += `\n`;
+    } else {
+      // SC security screening not available
+      message += `🛡️ *SMART CONTRACT SECURITY*\n`;
+      message += `ℹ️ Advanced screening unavailable (Basic analysis above)\n\n`;
+    }
 
     // Holder Analysis Section
     message += `👥 *HOLDER ANALYSIS*\n`;
@@ -364,18 +404,23 @@ export class RugAlertsService {
       message += `⚠️ Cannot trade this token on DEXs\n`;
     } else {
       message += `✅ ${liquidityAnalysis.liquidityPools.length} liquidity pool(s) found\n`;
-      
-      if (liquidityAnalysis.liquidityUSD) {
-        message += `💰 Total Liquidity: ${this.formatNumber(liquidityAnalysis.liquidityUSD)} (${t(lang, 'common.bscLabel')})\n`;
-        
+
+      // Use single liquidity source: prefer tradingActivity (DexScreener) over liquidityAnalysis
+      const liquidityUSD = (tradingActivity.totalLiquidityUsd && tradingActivity.totalLiquidityUsd > 0)
+        ? tradingActivity.totalLiquidityUsd
+        : liquidityAnalysis.liquidityUSD;
+
+      if (liquidityUSD) {
+        message += `💰 Total Liquidity: $${this.formatNumber(liquidityUSD)}\n`;
+
         // Liquidity health check
-        if (liquidityAnalysis.liquidityUSD < 1000) {
+        if (liquidityUSD < 1000) {
           message += `⚠️ EXTREMELY LOW - High slippage expected\n`;
-        } else if (liquidityAnalysis.liquidityUSD < 10000) {
+        } else if (liquidityUSD < 10000) {
           message += `⚠️ VERY LOW - Significant slippage expected\n`;
-        } else if (liquidityAnalysis.liquidityUSD < 50000) {
+        } else if (liquidityUSD < 50000) {
           message += `⚠️ LOW - Moderate slippage expected\n`;
-        } else if (liquidityAnalysis.liquidityUSD < 100000) {
+        } else if (liquidityUSD < 100000) {
           message += `✅ ADEQUATE - Normal trading conditions\n`;
         } else {
           message += `✅ GOOD - Healthy liquidity\n`;
@@ -409,86 +454,64 @@ export class RugAlertsService {
     }
     message += `\n`;
 
-    // Trading Activity Section
+    // Trading Activity Section - Condensed
     message += `📈 *TRADING ACTIVITY (24H)*\n`;
-    if (!tradingActivity.hasActiveTrading) {
-      message += `⚠️ Low or no trading activity detected\n`;
-    } else {
-      message += `✅ Active trading detected\n`;
-    }
+
+    // Build compact stats line
+    const stats: string[] = [];
     if (tradingActivity.txCount24h !== undefined) {
-      message += `🔄 Transactions: ${tradingActivity.txCount24h}\n`;
+      stats.push(`${this.formatNumber(tradingActivity.txCount24h)} tx`);
     }
     if (tradingActivity.uniqueTraders24h !== undefined) {
-      message += `👥 Unique Traders: ${tradingActivity.uniqueTraders24h}\n`;
+      stats.push(`${this.formatNumber(tradingActivity.uniqueTraders24h)} traders`);
     }
     if (tradingActivity.volume24h !== undefined && tradingActivity.volume24h > 0) {
-      message += `💵 Volume: $${this.formatNumber(tradingActivity.volume24h)}\n`;
+      stats.push(`$${this.formatNumber(tradingActivity.volume24h)} vol`);
     }
     if (tradingActivity.priceChange24h !== undefined && tradingActivity.priceChange24h !== null) {
       const priceChange = Number(tradingActivity.priceChange24h);
       if (!isNaN(priceChange)) {
         const priceChangeEmoji = priceChange >= 0 ? '📈' : '📉';
-        message += `${priceChangeEmoji} Price Change: ${priceChange.toFixed(2)}%\n`;
+        stats.push(`${priceChangeEmoji}${priceChange > 0 ? '+' : ''}${priceChange.toFixed(1)}%`);
       }
     }
+
+    if (stats.length > 0) {
+      const statusIcon = tradingActivity.hasActiveTrading ? '✅' : '⚠️';
+      message += `${statusIcon} ${stats.join(' • ')}\n`;
+    } else {
+      message += `⚠️ No trading activity detected\n`;
+    }
     
-    // Liquidity vs Volume Analysis
-    if (tradingActivity.liquidityToVolumeRatio !== undefined && tradingActivity.totalLiquidityUsd !== undefined) {
-      message += `\n💧 *LIQUIDITY EFFICIENCY*\n`;
-      message += `• Total Liquidity: $${this.formatNumber(tradingActivity.totalLiquidityUsd)}\n`;
-      if (tradingActivity.volume24h && tradingActivity.volume24h > 0) {
-        message += `• Liquidity/Volume Ratio: ${tradingActivity.liquidityToVolumeRatio.toFixed(2)}x\n`;
-        
-        // Efficiency interpretation
-        const efficiency = tradingActivity.liquidityEfficiency;
-        let efficiencyEmoji = '';
-        let efficiencyText = '';
-        
-        switch (efficiency) {
-          case 'EXCELLENT':
-            efficiencyEmoji = '🟢';
-            efficiencyText = 'EXCELLENT - Optimal trading conditions';
-            break;
-          case 'GOOD':
-            efficiencyEmoji = '🟢';
-            efficiencyText = 'GOOD - Healthy liquidity for volume';
-            break;
-          case 'ADEQUATE':
-            efficiencyEmoji = '🟡';
-            efficiencyText = 'ADEQUATE - Acceptable trading conditions';
-            break;
-          case 'POOR':
-            efficiencyEmoji = '🟠';
-            efficiencyText = 'POOR - Liquidity may be excessive for activity';
-            break;
-          case 'CRITICAL':
-            efficiencyEmoji = '🔴';
-            efficiencyText = 'CRITICAL - Insufficient liquidity or excessive volume';
-            break;
-          default:
-            efficiencyEmoji = '❓';
-            efficiencyText = 'Unknown efficiency';
+    // Liquidity Efficiency Analysis (if volume data available)
+    if (tradingActivity.volume24h && tradingActivity.volume24h > 0) {
+      // Use same liquidity source as above
+      const liquidityUSD = (tradingActivity.totalLiquidityUsd && tradingActivity.totalLiquidityUsd > 0)
+        ? tradingActivity.totalLiquidityUsd
+        : liquidityAnalysis.liquidityUSD;
+
+      if (liquidityUSD) {
+        const ratio = liquidityUSD / tradingActivity.volume24h;
+
+        // Use existing efficiency if available, otherwise calculate
+        let efficiency = tradingActivity.liquidityEfficiency;
+        if (!efficiency) {
+          if (ratio >= 20) efficiency = 'ADEQUATE';
+          else if (ratio >= 5) efficiency = 'GOOD';
+          else if (ratio >= 3) efficiency = 'EXCELLENT';
+          else efficiency = 'CRITICAL';
         }
-        
-        message += `• Efficiency: ${efficiencyEmoji} ${efficiencyText}\n`;
-      } else {
-        message += `• No volume data available for ratio calculation\n`;
-      }
-    } else if (liquidityAnalysis.liquidityUSD && tradingActivity.volume24h && tradingActivity.volume24h > 0) {
-      // Fallback calculation using existing liquidity data
-      const ratio = liquidityAnalysis.liquidityUSD / tradingActivity.volume24h;
-      message += `\n💧 *LIQUIDITY EFFICIENCY*\n`;
-      message += `• Liquidity/Volume Ratio: ${ratio.toFixed(2)}x\n`;
-      
-      if (ratio >= 20) {
-        message += `• Efficiency: 🟡 ADEQUATE - Standard liquidity coverage\n`;
-      } else if (ratio >= 5) {
-        message += `• Efficiency: 🟢 GOOD - Healthy liquidity efficiency\n`;
-      } else if (ratio >= 3) {
-        message += `• Efficiency: 🟢 EXCELLENT - Optimal trading efficiency\n`;
-      } else {
-        message += `• Efficiency: 🔴 CRITICAL - Low liquidity for volume\n`;
+
+        const efficiencyMap: Record<string, { emoji: string; text: string }> = {
+          'EXCELLENT': { emoji: '🟢', text: 'Optimal trading' },
+          'GOOD': { emoji: '🟢', text: 'Healthy efficiency' },
+          'ADEQUATE': { emoji: '🟡', text: 'Standard coverage' },
+          'POOR': { emoji: '🟠', text: 'May be excessive' },
+          'CRITICAL': { emoji: '🔴', text: 'Insufficient' }
+        };
+
+        const effInfo = efficiencyMap[efficiency] || { emoji: '❓', text: 'Unknown' };
+        message += `🔁 Liq/Vol Ratio: ${ratio.toFixed(1)}x ${effInfo.emoji} ${effInfo.text}\n`;
       }
     }
     message += `\n`;

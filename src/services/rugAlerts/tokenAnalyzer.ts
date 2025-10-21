@@ -7,6 +7,7 @@ import { getWalletTokensWithPrices } from '@/services/wallet/scannerUtils';
 import { getCachedTokenPrice, getBNBPrice } from '@/services/wallet/tokenPriceCache';
 import { createLogger } from '@/utils/logger';
 import { priceDeviationChecker } from '@/services/priceDeviation/priceDeviationChecker';
+import { hapiLabsService, SCSecurityAnalysis } from '@/services/hapiLabs';
 
 const logger = createLogger('rugAlerts.tokenAnalyzer');
 
@@ -137,6 +138,7 @@ export interface RugAlertAnalysis {
   liquidityAnalysis: LiquidityAnalysis;
   tradingActivity: TradingActivityAnalysis;
   honeypotAnalysis: HoneypotAnalysis;
+  scSecurityAnalysis?: SCSecurityAnalysis; // HAPI Labs smart contract security analysis
   safetyScore: number; // Changed from riskScore to safetyScore
   safetyScoreDetails: { // Changed from riskScoreDetails to safetyScoreDetails
     holders: number;
@@ -147,6 +149,7 @@ export interface RugAlertAnalysis {
     age: number;
     honeypot: number;
     diamondHands: number;
+    scSecurity: number; // Smart contract security score (0-15 points)
     priceDeviation?: number; // New field for price deviation score
   };
   priceDeviationWarning?: string; // Warning message if deviation detected
@@ -1986,12 +1989,13 @@ export class TokenAnalyzer {
       }
 
       // Run all analyses in parallel
-      const [holderAnalysis, liquidityAnalysis, tradingActivity, honeypotAnalysis, priceDeviationResult] = await Promise.all([
+      const [holderAnalysis, liquidityAnalysis, tradingActivity, honeypotAnalysis, priceDeviationResult, scSecurityAnalysis] = await Promise.all([
         this.getTokenHolders(tokenAddress, metadata), // This can now return null
         this.analyzeLiquidity(tokenAddress),
         this.analyzeTradingActivity(tokenAddress),
         this.detectHoneypot(tokenAddress),
-        priceDeviationChecker.checkPriceDeviation(tokenAddress)
+        priceDeviationChecker.checkPriceDeviation(tokenAddress),
+        hapiLabsService.getContractSecurity(tokenAddress, 'bsc') // HAPI Labs SC screening
       ]);
 
       // Check if holderAnalysis is null
@@ -2003,13 +2007,14 @@ export class TokenAnalyzer {
       // Calculate detailed safety scores (higher is better, max 100)
       const safetyScoreDetails = {
         holders: 0,      // Max 15 points (reduced from 20)
-        liquidity: 0,    // Max 25 points
+        liquidity: 0,    // Max 20 points (reduced from 25)
         verification: 0, // Max 10 points
         trading: 0,      // Max 10 points
         ownership: 0,    // Max 10 points
         age: 0,          // Max 10 points
-        honeypot: 0,     // Max 15 points
-        diamondHands: 0,  // Max 5 points (new)
+        honeypot: 0,     // Max 10 points (reduced from 15)
+        diamondHands: 0, // Max 5 points
+        scSecurity: 0,   // Max 15 points (new - HAPI Labs SC security)
         priceDeviation: 0 // Price deviation penalty (negative points)
       };
 
@@ -2030,31 +2035,31 @@ export class TokenAnalyzer {
         allRiskFactors.push('Contract source code not verified');
       }
 
-      // Liquidity score (0-25 points)
+      // Liquidity score (0-20 points)
       if (!liquidityAnalysis.hasLiquidity) {
         safetyScoreDetails.liquidity = 0;
         allRiskFactors.push('No liquidity pool found');
       } else {
-        // Base liquidity amount score (0-15 points)
+        // Base liquidity amount score (0-12 points)
         if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 100000) {
-          safetyScoreDetails.liquidity = 15;
-        } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 50000) {
           safetyScoreDetails.liquidity = 12;
+        } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 50000) {
+          safetyScoreDetails.liquidity = 10;
         } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 10000) {
-          safetyScoreDetails.liquidity = 8;
+          safetyScoreDetails.liquidity = 6;
         } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 1000) {
-          safetyScoreDetails.liquidity = 4;
+          safetyScoreDetails.liquidity = 3;
           allRiskFactors.push('Very low liquidity (<$10k)');
         } else {
           safetyScoreDetails.liquidity = 0;
           allRiskFactors.push('Extremely low liquidity (<$1k)');
         }
 
-        // LP security bonus (0-10 points)
+        // LP security bonus (0-8 points)
         if (liquidityAnalysis.lpTokenBurned) {
-          safetyScoreDetails.liquidity += 10;
-        } else if (liquidityAnalysis.lpTokenLocked) {
           safetyScoreDetails.liquidity += 8;
+        } else if (liquidityAnalysis.lpTokenLocked) {
+          safetyScoreDetails.liquidity += 6;
         } else {
           allRiskFactors.push('LP tokens not secured (not burned or locked)');
         }
@@ -2094,12 +2099,12 @@ export class TokenAnalyzer {
         safetyScoreDetails.age = 5; // Default if age unknown
       }
 
-      // Honeypot score (0-15 points) - NOT a honeypot = full points
+      // Honeypot score (0-10 points) - NOT a honeypot = full points
       if (honeypotAnalysis.isHoneypot) {
         safetyScoreDetails.honeypot = 0;
         allRiskFactors.push(`🚫 HONEYPOT DETECTED: ${honeypotAnalysis.cannotSellReason || 'Cannot sell token'}`);
       } else {
-        safetyScoreDetails.honeypot = 15;
+        safetyScoreDetails.honeypot = 10;
       }
 
       // Diamond hands score (0-5 points) - more diamond hands = higher score
@@ -2112,6 +2117,37 @@ export class TokenAnalyzer {
         safetyScoreDetails.diamondHands = 1;
       } else {
         safetyScoreDetails.diamondHands = 0;
+      }
+
+      // Smart Contract Security score (0-15 points) - HAPI Labs analysis
+      if (scSecurityAnalysis && scSecurityAnalysis.hasData) {
+        safetyScoreDetails.scSecurity = scSecurityAnalysis.securityScore;
+
+        // Add critical security issues to risk factors
+        if (scSecurityAnalysis.securityIssues.critical.length > 0) {
+          scSecurityAnalysis.securityIssues.critical.forEach(issue => {
+            allRiskFactors.push(`🚨 CRITICAL SC VULNERABILITY: ${issue}`);
+          });
+        }
+
+        // Add high-risk security issues to risk factors
+        if (scSecurityAnalysis.securityIssues.high.length > 0) {
+          scSecurityAnalysis.securityIssues.high.forEach(issue => {
+            allRiskFactors.push(`⚠️ HIGH-RISK SC PATTERN: ${issue}`);
+          });
+        }
+
+        // Log medium-risk issues (shown in detailed view, not in main risk factors)
+        if (scSecurityAnalysis.securityIssues.medium.length > 0) {
+          logger.info('Medium-risk SC security issues found', {
+            tokenAddress,
+            issues: scSecurityAnalysis.securityIssues.medium
+          });
+        }
+      } else {
+        // No SC security data available - neutral score (0 points, doesn't affect overall score)
+        safetyScoreDetails.scSecurity = 0;
+        logger.info('SC security screening not available', { tokenAddress });
       }
 
       // Price deviation penalty (negative points based on deviation)
@@ -2188,6 +2224,7 @@ export class TokenAnalyzer {
         liquidityAnalysis,
         tradingActivity,
         honeypotAnalysis,
+        scSecurityAnalysis: scSecurityAnalysis && scSecurityAnalysis.hasData ? scSecurityAnalysis : undefined,
         safetyScore,
         safetyScoreDetails,
         priceDeviationWarning,
