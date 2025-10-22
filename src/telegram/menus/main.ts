@@ -93,6 +93,9 @@ ${t(lang, 'mainMenu.description')}`
 			Markup.button.callback(t(lang, 'mainMenu.todaysPick'), 'todays_pick')
 		],
 		[
+			Markup.button.callback(lang === 'zh' ? '📰 今日新闻' : '📰 Today\'s News', 'todays_news')
+		],
+		[
 			Markup.button.callback(t(lang, 'mainMenu.trackWallet'), 'track_wallet'),
 			Markup.button.callback(t(lang, 'mainMenu.trackToken'), 'track_token')
 		],

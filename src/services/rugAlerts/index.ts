@@ -215,10 +215,11 @@ export class RugAlertsService {
     // Generate natural language summary
     const summary = this.generateNaturalSummary(analysis, lang);
     
-    // Send summary with details button
+    // Send summary with details and audit buttons
     const keyboard = {
       inline_keyboard: [
         [{ text: '📋 View Detailed Report', callback_data: `rug_details:${metadata.address}` }],
+        [{ text: '🤖 ChainGPT SC Audit', callback_data: `chaingpt_audit:${metadata.address}` }],
         [{ text: '🔙 Back', callback_data: 'start_edit' }]
       ]
     };
@@ -604,6 +605,7 @@ export class RugAlertsService {
     const keyboard = {
       inline_keyboard: [
         [{ text: '📊 View Summary', callback_data: `rug_summary:${metadata.address}` }],
+        [{ text: '🤖 ChainGPT SC Audit', callback_data: `chaingpt_audit:${metadata.address}` }],
         [{ text: '🔍 Analyze Another Token', callback_data: 'rug_alerts' }],
         [{ text: '🔙 Back to Menu', callback_data: 'start_edit' }]
       ]
@@ -666,5 +668,145 @@ export class RugAlertsService {
     if (safetyScore >= 40) return 'MEDIUM RISK';
     if (safetyScore >= 20) return 'HIGH RISK';
     return 'CRITICAL RISK';
+  }
+
+  /**
+   * Handles ChainGPT smart contract audit request
+   */
+  async handleChainGPTAudit(ctx: Context, tokenAddress: string) {
+    const userId = ctx.from!.id;
+
+    try {
+      // Answer callback query immediately
+      await ctx.answerCbQuery('Starting ChainGPT AI audit...');
+
+      // Show loading message
+      await ctx.editMessageText(
+        '🤖 *ChainGPT AI Smart Contract Audit*\n\n' +
+        '⏳ Fetching contract source code and performing AI analysis...\n\n' +
+        'This may take 30-60 seconds. Please wait...',
+        { parse_mode: 'Markdown' }
+      );
+
+      // Import ChainGPT auditor
+      const { chainGPTAuditor } = await import('@/services/chainGPT/smartContractAuditor');
+
+      // Check if service is available
+      if (!chainGPTAuditor.isAvailable()) {
+        await ctx.editMessageText(
+          '❌ *ChainGPT Audit Unavailable*\n\n' +
+          'The ChainGPT smart contract auditor is not configured.\n\n' +
+          'Please contact the administrator to add the CHAINGPT_API_KEY.',
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🔙 Back to Analysis', callback_data: `rug_details:${tokenAddress}` }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+
+      // Perform the audit (BSC chain ID = 56)
+      const auditResult = await chainGPTAuditor.auditContractByAddress(tokenAddress, 56);
+
+      if (!auditResult.success) {
+        await ctx.editMessageText(
+          '❌ *ChainGPT Audit Failed*\n\n' +
+          `${auditResult.error || 'Unknown error occurred'}\n\n` +
+          '_Tip: Make sure the contract is verified on BSCScan._',
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🔙 Back to Analysis', callback_data: `rug_details:${tokenAddress}` }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+
+      // Format and send the audit report
+      await this.sendChainGPTAuditReport(ctx, tokenAddress, auditResult);
+
+    } catch (error) {
+      logger.error('Error performing ChainGPT audit', {
+        tokenAddress,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      await ctx.editMessageText(
+        '❌ *Error Performing Audit*\n\n' +
+        'An unexpected error occurred while auditing the contract.\n\n' +
+        `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔙 Back to Analysis', callback_data: `rug_details:${tokenAddress}` }]
+            ]
+          }
+        }
+      );
+    }
+  }
+
+  /**
+   * Formats and sends the ChainGPT audit report
+   */
+  private async sendChainGPTAuditReport(ctx: Context, tokenAddress: string, auditResult: any) {
+    const report = auditResult.auditReport;
+    const summary = auditResult.summary;
+
+    // Telegram message limit is 4096 characters
+    const maxLength = 4000;
+
+    // Use plain text to avoid markdown parsing issues
+    let message = '🤖 ChainGPT AI Smart Contract Audit\n';
+    message += `Contract: ${tokenAddress}\n\n`;
+
+    if (summary) {
+      message += `${summary}\n\n`;
+    }
+
+    message += '📋 Full Audit Report:\n\n';
+
+    // Add the audit report, truncating if necessary
+    if (report.length + message.length > maxLength) {
+      const availableLength = maxLength - message.length - 100; // Leave room for truncation notice
+      message += report.substring(0, availableLength);
+      message += '\n\n[Report truncated due to length. Key findings shown above.]';
+    } else {
+      message += report;
+    }
+
+    message += '\n\n⚠️ Disclaimer: This audit is AI-generated and should be used as a supplementary tool. Always conduct professional audits for production contracts.';
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '📋 Back to Detailed Report', callback_data: `rug_details:${tokenAddress}` }],
+        [{ text: '📊 View Summary', callback_data: `rug_summary:${tokenAddress}` }],
+        [{ text: '🔙 Back to Menu', callback_data: 'start_edit' }]
+      ]
+    };
+
+    // If message is still too long, split it
+    if (message.length > 4096) {
+      // Send in two parts
+      const part1 = message.substring(0, 4000);
+      const part2 = message.substring(4000);
+
+      await ctx.editMessageText(part1); // No parse_mode = plain text
+      await ctx.reply(part2, {
+        reply_markup: keyboard
+      });
+    } else {
+      await ctx.editMessageText(message, {
+        reply_markup: keyboard
+      });
+    }
   }
 }
