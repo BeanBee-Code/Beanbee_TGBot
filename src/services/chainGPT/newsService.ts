@@ -315,7 +315,7 @@ class ChainGPTNewsService {
       message += '\n';
     });
 
-    message += '⚠️ News provided by ChainGPT AI News Generator';
+    message += '❤️ News provided by ChainGPT AI News Generator';
 
     return message;
   }
