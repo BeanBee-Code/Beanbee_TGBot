@@ -668,13 +668,14 @@ export class WalletService {
 			const supported = await getTranslation(ctx, 'wallet.supportedWallets');
 			const autoConfirm = await getTranslation(ctx, 'wallet.connectionConfirmed');
 			const linkButton = await getTranslation(ctx, 'wallet.connectViaLink');
+			const androidFix = await getTranslation(ctx, 'wallet.androidTelegramFix');
 
 			await ctx.replyWithPhoto({ source: qrBuffer }, {
 				caption: `${connectTitle}\n\n` +
 					`${scanQR}\n` +
 					`${cantScan}\n\n` +
 					`${supported}\n\n` +
-					`${autoConfirm}`,
+					`${autoConfirm}${androidFix}`,
 				parse_mode: 'Markdown',
 				reply_markup: {
 					inline_keyboard: [
