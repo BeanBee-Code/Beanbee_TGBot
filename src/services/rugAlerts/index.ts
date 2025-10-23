@@ -96,6 +96,11 @@ export class RugAlertsService {
 
     let summary = '';
 
+    // Use the same effective liquidity calculation as the safety score and display
+    const effectiveLiquidityUSD = (tradingActivity.totalLiquidityUsd && tradingActivity.totalLiquidityUsd > 0)
+      ? tradingActivity.totalLiquidityUsd
+      : liquidityAnalysis.liquidityUSD;
+
     // Start with token name and overall assessment
     const safetyLevel = this.getSafetyLevel(safetyScore);
     const safetyEmoji = this.getSafetyEmoji(safetyScore);
@@ -112,28 +117,28 @@ export class RugAlertsService {
     } else {
       summary = `${safetyEmoji} ${metadata.name} (${metadata.symbol}) shows high risk indicators with a score of ${safetyScore}/100. `;
     }
-    
+
     // Add key insights
     const insights = [];
-    
+
     // Honeypot status
     if (!honeypotAnalysis.isHoneypot) {
       if (honeypotAnalysis.sellTax && honeypotAnalysis.sellTax > 10) {
         insights.push(`has a high sell tax of ${honeypotAnalysis.sellTax}%`);
       }
-      
+
       // Holder concentration
       if (holderAnalysis.top10ConcentrationExcludingLP > 50) {
         insights.push('is heavily concentrated among top holders');
       } else if (holderAnalysis.top10ConcentrationExcludingLP < 20) {
         insights.push('has good holder distribution');
       }
-      
-      // Liquidity status
+
+      // Liquidity status - use effective liquidity
       if (!liquidityAnalysis.hasLiquidity) {
         insights.push('has no liquidity pool');
-      } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD < 10000) {
-        insights.push(`has very low liquidity ($${this.formatNumber(liquidityAnalysis.liquidityUSD)})`);
+      } else if (effectiveLiquidityUSD && effectiveLiquidityUSD < 10000) {
+        insights.push(`has very low liquidity ($${this.formatNumber(effectiveLiquidityUSD)})`);
       } else if (liquidityAnalysis.lpTokenBurned) {
         insights.push('has permanently locked liquidity');
       } else if (!liquidityAnalysis.lpTokenLocked && !liquidityAnalysis.lpTokenBurned) {
@@ -192,8 +197,8 @@ export class RugAlertsService {
     // Add key metrics
     summary += '\n\n📊 **Key Metrics (BSC Chain):**\n';
     summary += `• Holders: ${holderAnalysis.totalHolders.toLocaleString()}\n`;
-    if (liquidityAnalysis.liquidityUSD) {
-      summary += `• Liquidity: ${this.formatNumber(liquidityAnalysis.liquidityUSD)}\n`;
+    if (effectiveLiquidityUSD) {
+      summary += `• Liquidity: ${this.formatNumber(effectiveLiquidityUSD)}\n`;
     }
     if (tradingActivity.volume24h) {
       summary += `• 24h Volume: ${this.formatNumber(tradingActivity.volume24h)}\n`;

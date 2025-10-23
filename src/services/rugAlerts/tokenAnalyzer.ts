@@ -2018,7 +2018,18 @@ export class TokenAnalyzer {
         priceDeviation: 0 // Price deviation penalty (negative points)
       };
 
+      // Start with holder analysis risk factors, but we'll correct liquidity pool count based on full analysis
       const allRiskFactors: string[] = [...holderAnalysis.riskFactors];
+
+      // Correct the liquidity pool count risk factor based on full liquidity analysis
+      // The holder analysis only checks LP pools in top 10 holders, but liquidityAnalysis has all pools
+      if (liquidityAnalysis.hasLiquidity && liquidityAnalysis.liquidityPools.length > 1) {
+        // Remove the "Only one liquidity pool found" risk factor if we actually have multiple pools
+        const oneLpIndex = allRiskFactors.findIndex(f => f.includes('Only one liquidity pool found'));
+        if (oneLpIndex !== -1) {
+          allRiskFactors.splice(oneLpIndex, 1);
+        }
+      }
 
       // Holder distribution score (0-15 points) - better distribution = higher score
       if (holderAnalysis.top10ConcentrationExcludingLP <= 20) safetyScoreDetails.holders = 15;
@@ -2036,18 +2047,23 @@ export class TokenAnalyzer {
       }
 
       // Liquidity score (0-20 points)
+      // Use the same liquidity data source as the display (prefer tradingActivity data over liquidityAnalysis)
+      const effectiveLiquidityUSD = (tradingActivity.totalLiquidityUsd && tradingActivity.totalLiquidityUsd > 0)
+        ? tradingActivity.totalLiquidityUsd
+        : liquidityAnalysis.liquidityUSD;
+
       if (!liquidityAnalysis.hasLiquidity) {
         safetyScoreDetails.liquidity = 0;
         allRiskFactors.push('No liquidity pool found');
       } else {
         // Base liquidity amount score (0-12 points)
-        if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 100000) {
+        if (effectiveLiquidityUSD && effectiveLiquidityUSD >= 100000) {
           safetyScoreDetails.liquidity = 12;
-        } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 50000) {
+        } else if (effectiveLiquidityUSD && effectiveLiquidityUSD >= 50000) {
           safetyScoreDetails.liquidity = 10;
-        } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 10000) {
+        } else if (effectiveLiquidityUSD && effectiveLiquidityUSD >= 10000) {
           safetyScoreDetails.liquidity = 6;
-        } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD >= 1000) {
+        } else if (effectiveLiquidityUSD && effectiveLiquidityUSD >= 1000) {
           safetyScoreDetails.liquidity = 3;
           allRiskFactors.push('Very low liquidity (<$10k)');
         } else {
@@ -2201,7 +2217,7 @@ export class TokenAnalyzer {
         recommendations.push('🔍 Unverified contract - source code cannot be reviewed');
       }
 
-      if (!liquidityAnalysis.hasLiquidity || (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD < 50000)) {
+      if (!liquidityAnalysis.hasLiquidity || (effectiveLiquidityUSD && effectiveLiquidityUSD < 50000)) {
         recommendations.push('💧 Insufficient liquidity - difficult to exit position');
       }
 
