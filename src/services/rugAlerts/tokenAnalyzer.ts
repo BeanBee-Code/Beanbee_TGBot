@@ -2027,6 +2027,11 @@ export class TokenAnalyzer {
         // Remove the "Only one liquidity pool found" risk factor if we actually have multiple pools
         const oneLpIndex = allRiskFactors.findIndex(f => f.includes('Only one liquidity pool found'));
         if (oneLpIndex !== -1) {
+          logger.info('Removing incorrect "Only one liquidity pool" risk factor', {
+            tokenAddress,
+            actualPoolCount: liquidityAnalysis.liquidityPools.length,
+            removedFactor: allRiskFactors[oneLpIndex]
+          });
           allRiskFactors.splice(oneLpIndex, 1);
         }
       }

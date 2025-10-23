@@ -877,6 +877,11 @@ async function analyzeTokenSafety(tokenAddress: string) {
       };
     }
 
+    // Calculate effective liquidity using the same logic as the display and safety score
+    const effectiveLiquidityUSD = (analysis.tradingActivity.totalLiquidityUsd && analysis.tradingActivity.totalLiquidityUsd > 0)
+      ? analysis.tradingActivity.totalLiquidityUsd
+      : analysis.liquidityAnalysis.liquidityUSD;
+
     // Format the response for AI consumption
     const response = {
       tokenAddress: analysis.metadata.address,
@@ -891,7 +896,7 @@ async function analyzeTokenSafety(tokenAddress: string) {
       riskFactors: analysis.holderAnalysis.riskFactors,
       holderConcentration: analysis.holderAnalysis.top10ConcentrationExcludingLP,
       hasSecuredLiquidity: analysis.liquidityAnalysis.lpTokenBurned || analysis.liquidityAnalysis.lpTokenLocked,
-      liquidityAmount: analysis.liquidityAnalysis.liquidityUSD,
+      liquidityAmount: effectiveLiquidityUSD, // Use effective liquidity instead of just liquidityAnalysis.liquidityUSD
       isHoneypot: analysis.honeypotAnalysis.isHoneypot,
 
       // Positive indicators
