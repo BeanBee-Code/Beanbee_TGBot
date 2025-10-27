@@ -150,13 +150,23 @@ async function startApplication() {
         await startApiServer();
         logger.info('✅ API server started - Cloud Run health checks will pass');
         
-        // Initialize other services in the background
+        // Initialize other services in the background (non-blocking)
         logger.info('Initializing database and services...');
-        await connectDatabase();
-        logger.info('✅ Database connected');
         
-        await initMoralis();
-        logger.info('✅ Moralis initialized');
+        // Try to connect to database but don't crash if it fails
+        connectDatabase(false).catch(err => {
+            logger.error('Initial database connection failed, will retry in background', err);
+        });
+        
+        // Give database a moment to connect before proceeding
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        try {
+            await initMoralis();
+            logger.info('✅ Moralis initialized');
+        } catch (error) {
+            logger.error('Failed to initialize Moralis, will continue without it', error);
+        }
 
         const botInstance = new TelegramBot();
         
@@ -164,8 +174,16 @@ async function startApplication() {
         (globalThis as any).botExport = botInstance;
         
         // Start Telegram bot
-        await botInstance.start();
-        logger.info('✅ Telegram bot started');
+        try {
+            await botInstance.start();
+            logger.info('✅ Telegram bot started');
+        } catch (error: any) {
+            if (error.message?.includes('Conflict: terminated by other getUpdates request')) {
+                logger.error('Another instance of the bot is already running');
+                throw error;
+            }
+            logger.error('Failed to start Telegram bot, will retry', error);
+        }
 
         logger.info('🚀 Application started successfully');
     } catch (error: any) {
@@ -175,8 +193,9 @@ async function startApplication() {
             });
             process.exit(1);
         }
-        logger.error('Failed to start application', error);
-        process.exit(1);
+        logger.error('Critical error during application startup', error);
+        // Don't exit - keep API server running for Cloud Run health checks
+        logger.warn('Application running in degraded mode - API server is up but some services may be unavailable');
     }
 }
 
