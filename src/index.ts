@@ -144,20 +144,28 @@ if (process.env.NODE_ENV === 'production') {
 async function startApplication() {
     try {
         logger.info('Starting application...');
+        
+        // Start API server FIRST for Cloud Run health checks
+        const { startApiServer } = await import('./api/server');
+        await startApiServer();
+        logger.info('✅ API server started - Cloud Run health checks will pass');
+        
+        // Initialize other services in the background
+        logger.info('Initializing database and services...');
         await connectDatabase();
+        logger.info('✅ Database connected');
+        
         await initMoralis();
+        logger.info('✅ Moralis initialized');
 
         const botInstance = new TelegramBot();
         
         // Set the global bot export for notification services and API
         (globalThis as any).botExport = botInstance;
         
-        // Use Promise.all to start both bot and API server in parallel
-        const { startApiServer } = await import('./api/server');
-        await Promise.all([
-            botInstance.start(),
-            startApiServer()
-        ]);
+        // Start Telegram bot
+        await botInstance.start();
+        logger.info('✅ Telegram bot started');
 
         logger.info('🚀 Application started successfully');
     } catch (error: any) {
