@@ -111,17 +111,19 @@ const logger = winston.createLogger({
   ],
   // Handle exceptions and rejections
   exceptionHandlers: [
-    new winston.transports.File({ 
+    new winston.transports.File({
       filename: path.join(logsDir, 'exceptions.log'),
       format: fileFormat,
     }),
   ],
-  rejectionHandlers: [
-    new winston.transports.File({ 
-      filename: path.join(logsDir, 'rejections.log'),
-      format: fileFormat,
-    }),
-  ],
+  // Do NOT use rejectionHandlers here - we handle them in index.ts
+  // This is to prevent duplicate logging and allow custom filtering
+  // rejectionHandlers: [
+  //   new winston.transports.File({
+  //     filename: path.join(logsDir, 'rejections.log'),
+  //     format: fileFormat,
+  //   }),
+  // ],
 });
 
 // Create child loggers for different modules

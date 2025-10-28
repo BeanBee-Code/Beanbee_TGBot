@@ -877,6 +877,11 @@ async function analyzeTokenSafety(tokenAddress: string) {
       };
     }
 
+    // Calculate effective liquidity using the same logic as the display and safety score
+    const effectiveLiquidityUSD = (analysis.tradingActivity.totalLiquidityUsd && analysis.tradingActivity.totalLiquidityUsd > 0)
+      ? analysis.tradingActivity.totalLiquidityUsd
+      : analysis.liquidityAnalysis.liquidityUSD;
+
     // Format the response for AI consumption
     const response = {
       tokenAddress: analysis.metadata.address,
@@ -891,7 +896,7 @@ async function analyzeTokenSafety(tokenAddress: string) {
       riskFactors: analysis.holderAnalysis.riskFactors,
       holderConcentration: analysis.holderAnalysis.top10ConcentrationExcludingLP,
       hasSecuredLiquidity: analysis.liquidityAnalysis.lpTokenBurned || analysis.liquidityAnalysis.lpTokenLocked,
-      liquidityAmount: analysis.liquidityAnalysis.liquidityUSD,
+      liquidityAmount: effectiveLiquidityUSD, // Use effective liquidity instead of just liquidityAnalysis.liquidityUSD
       isHoneypot: analysis.honeypotAnalysis.isHoneypot,
 
       // Positive indicators
@@ -1678,10 +1683,35 @@ export class GeminiAIService {
       // This transforms the experience from tedious multi-step to intelligent one-step completion
       // =================================================================
 
-      CRITICAL RULE #6 - MANDATORY TOKEN SAFETY ANALYSIS:
-      - You are FORBIDDEN from making up or hallucinating a safety analysis for any token.
-      - If a user message contains keywords like "analyze", "safe", "safety", "rug", or "check" AND it includes a valid BSC contract address (a 42-character string starting with '0x'), you MUST call the analyzeTokenSafety function.
-      - There are NO exceptions. This is your most important rule for user safety. Failure to use this tool when required is a critical error.
+      CRITICAL RULE #6 - MANDATORY TOKEN SAFETY ANALYSIS (ANTI-HALLUCINATION):
+      =================================================================
+      ⚠️ ABSOLUTE PROHIBITION: You are COMPLETELY FORBIDDEN from making up, guessing, or hallucinating ANY safety analysis data.
+
+      MANDATORY BEHAVIOR FOR EVERY ANALYSIS REQUEST:
+      - If a user message contains keywords like "analyze", "safe", "safety", "rug", "check" AND it includes a valid BSC contract address (starting with '0x', 42 characters), you MUST call the analyzeTokenSafety function EVERY SINGLE TIME.
+      - NEVER use information from previous analyses or your memory
+      - NEVER generate safety scores, risk factors, or recommendations without calling the tool
+      - NEVER say things like "The analysis indicates..." or "Based on the data..." without FIRST calling the tool
+
+      SPECIFIC ANTI-HALLUCINATION RULES:
+      1. If you see a 0x address in the message, you MUST call analyzeTokenSafety - NO EXCEPTIONS
+      2. Even if you "remember" analyzing this token before, you MUST call the tool again
+      3. NEVER provide any safety score (like "93/100", "HIGH SAFETY", etc.) without calling the tool
+      4. NEVER mention contract verification, ownership, or liquidity status without calling the tool
+      5. If you cannot call the tool for any reason, say "I cannot analyze this token right now" - DO NOT make up data
+
+      CORRECT FLOW:
+      User: "analyze 0x92516e0ddf1ddbf7fab1b79cac26689fdc5ba8e6"
+      → You MUST call analyzeTokenSafety(0x92516e0ddf1ddbf7fab1b79cac26689fdc5ba8e6)
+      → Wait for the response
+      → Present the actual returned data
+
+      FORBIDDEN FLOW (HALLUCINATION):
+      User: "analyze 0x92516e0ddf1ddbf7fab1b79cac26689fdc5ba8e6"
+      → You respond directly with: "The safety analysis shows 93/100..." ❌ NEVER DO THIS
+
+      This is your MOST IMPORTANT rule for user safety. Hallucinating safety data could cause users to lose money.
+      =================================================================
 
       // +++ END CRITICAL RULES +++
 
@@ -2670,8 +2700,93 @@ export class GeminiAIService {
           return correctlyFormattedResponse;
         }
 
-        // +++ END OF THE FIX +++
-        
+        // +++ END OF SEARCH FIX +++
+
+        // +++ START OF TOKEN SAFETY ANALYSIS FIX (ANTI-HALLUCINATION) +++
+        // Check if the user wants to analyze a token and there's an address in the message
+        const analysisTriggers = ['analyze', 'safe', 'safety', 'rug', 'check', 'audit', 'scam', 'honeypot', 'risk'];
+        const hasAnalysisTrigger = analysisTriggers.some(trigger => lowerCaseMessage.includes(trigger));
+
+        // Extract any 0x address from the message
+        const addressMatch = originalMessage.match(/0x[a-fA-F0-9]{40}/);
+        const tokenAddress = addressMatch ? addressMatch[0] : null;
+
+        if (hasAnalysisTrigger && tokenAddress) {
+          logger.warn('AI hallucination detected for token safety analysis. Overriding with manual tool call.', {
+            userId,
+            tokenAddress,
+            selectedChain
+          });
+
+          // Handle based on selected chain
+          if (selectedChain === 'opbnb') {
+            // For opBNB, use the opBNB token analysis
+            const opbnbData = await analyzeOpbnbToken(tokenAddress);
+
+            if ('error' in opbnbData) {
+              const errorMessage = opbnbData.message || "I couldn't analyze this opBNB token. Please verify the address and try again.";
+              await this.saveToChatHistory(userId, 'assistant', errorMessage);
+              return errorMessage;
+            }
+
+            // Format the opBNB analysis response
+            const { getUserLanguage } = await import('@/i18n');
+            const lang = await getUserLanguage(numericUserId);
+            const tokenName = opbnbData.metadata?.name || 'Unknown';
+            const tokenSymbol = opbnbData.metadata?.symbol || 'UNKNOWN';
+            const holderCount = opbnbData.holders?.count || 0;
+            const riskLevel = opbnbData.riskLevel || 'medium';
+
+            const correctlyFormattedResponse = lang === 'zh'
+              ? `🔍 **opBNB 代币分析**\n\n代币: ${tokenName} (${tokenSymbol})\n地址: \`${tokenAddress}\`\n风险等级: ${riskLevel}\n\n持有人数量: ${holderCount}\n\n${opbnbData.insights?.join('\n') || ''}\n${opbnbData.warnings?.length ? '\n⚠️ 警告:\n' + opbnbData.warnings.join('\n') : ''}\n\n请使用 /start 菜单查看完整的 opBNB 代币分析功能。`
+              : `🔍 **opBNB Token Analysis**\n\nToken: ${tokenName} (${tokenSymbol})\nAddress: \`${tokenAddress}\`\nRisk Level: ${riskLevel}\n\nHolder Count: ${holderCount}\n\n${opbnbData.insights?.join('\n') || ''}\n${opbnbData.warnings?.length ? '\n⚠️ Warnings:\n' + opbnbData.warnings.join('\n') : ''}\n\nUse the /start menu to access full opBNB token analysis features.`;
+
+            await this.saveToChatHistory(userId, 'assistant', correctlyFormattedResponse);
+            return correctlyFormattedResponse;
+          } else {
+            // For BNB Chain, use the regular token safety analysis
+            const safetyData = await analyzeTokenSafety(tokenAddress);
+
+            if ('error' in safetyData) {
+              const errorMessage = safetyData.message || "I couldn't analyze this token. Please verify the address and try again.";
+              await this.saveToChatHistory(userId, 'assistant', errorMessage);
+              return errorMessage;
+            }
+
+            // Format the safety analysis response using natural language
+            const { getUserLanguage } = await import('@/i18n');
+            const lang = await getUserLanguage(numericUserId);
+
+            // Create a natural language summary
+            const safetyLevel = safetyData.safetyLevel || 'UNKNOWN';
+            const safetyScore = safetyData.safetyScore || 0;
+            const isHoneypot = safetyData.isHoneypot || false;
+
+            let correctlyFormattedResponse = '';
+
+            if (isHoneypot) {
+              correctlyFormattedResponse = lang === 'zh'
+                ? `🚫 **警告**: ${safetyData.tokenName} (${safetyData.tokenSymbol}) 是一个蜜罐代币！您购买后无法出售。\n\n请勿投资此代币！\n\n地址: \`${tokenAddress}\``
+                : `🚫 **WARNING**: ${safetyData.tokenName} (${safetyData.tokenSymbol}) is a HONEYPOT! You cannot sell this token after buying.\n\nDO NOT invest in this token!\n\nAddress: \`${tokenAddress}\``;
+            } else {
+              const safetyEmoji = safetyScore >= 80 ? '🟢' : safetyScore >= 60 ? '🟡' : safetyScore >= 40 ? '🟠' : '🔴';
+              const recommendation = safetyScore >= 70
+                ? (lang === 'zh' ? '相对安全，但请自行研究（DYOR）。' : 'relatively safe for trading, but always DYOR.')
+                : safetyScore >= 50
+                  ? (lang === 'zh' ? '中等风险，请谨慎投资。' : 'moderate risk - exercise caution.')
+                  : (lang === 'zh' ? '高风险，建议避免投资。' : 'high risk - consider avoiding.');
+
+              correctlyFormattedResponse = lang === 'zh'
+                ? `${safetyEmoji} **代币安全分析**\n\n代币: ${safetyData.tokenName} (${safetyData.tokenSymbol})\n安全分数: ${safetyScore}/100 (${safetyLevel})\n\n该代币${recommendation}\n\n主要指标:\n• 持有人: ${safetyData.totalHolders?.toLocaleString() || 'N/A'}\n• 前10持有人集中度: ${safetyData.holderConcentration?.toFixed(1) || 'N/A'}%\n• 流动性: $${safetyData.liquidityAmount?.toLocaleString() || 'N/A'}\n• 合约已验证: ${safetyData.contractVerified ? '是' : '否'}\n• 所有权已放弃: ${safetyData.ownershipRenounced ? '是' : '否'}\n• 流动性已锁定: ${safetyData.hasSecuredLiquidity ? '是' : '否'}\n\n地址: \`${tokenAddress}\`\n\n使用 /start 菜单查看完整的详细分析。`
+                : `${safetyEmoji} **Token Safety Analysis**\n\nToken: ${safetyData.tokenName} (${safetyData.tokenSymbol})\nSafety Score: ${safetyScore}/100 (${safetyLevel})\n\nThis token appears ${recommendation}\n\nKey Metrics:\n• Holders: ${safetyData.totalHolders?.toLocaleString() || 'N/A'}\n• Top 10 Concentration: ${safetyData.holderConcentration?.toFixed(1) || 'N/A'}%\n• Liquidity: $${safetyData.liquidityAmount?.toLocaleString() || 'N/A'}\n• Contract Verified: ${safetyData.contractVerified ? 'Yes' : 'No'}\n• Ownership Renounced: ${safetyData.ownershipRenounced ? 'Yes' : 'No'}\n• Liquidity Secured: ${safetyData.hasSecuredLiquidity ? 'Yes' : 'No'}\n\nAddress: \`${tokenAddress}\`\n\nUse /start menu to view the full detailed analysis.`;
+            }
+
+            await this.saveToChatHistory(userId, 'assistant', correctlyFormattedResponse);
+            return correctlyFormattedResponse;
+          }
+        }
+        // +++ END OF TOKEN SAFETY ANALYSIS FIX +++
+
         // Check for sentiment query intent
         const sentimentTriggers = ['sentiment', 'mood', 'feeling', 'bullish', 'bearish', 'how is the market'];
         const isSentimentIntent = sentimentTriggers.some(trigger => lowerCaseMessage.includes(trigger));
