@@ -5,6 +5,7 @@ import { TodaysPickCacheModel, TodaysPickData } from '../../database/models/Toda
 import { t, getUserLanguage } from '../../i18n';
 import { Context } from 'telegraf';
 import { formatUSDValue } from '../wallet/balance';
+import { TokenAnalyzer } from '../rugAlerts/tokenAnalyzer';
 
 const logger = createLogger('services.todaysPicks');
 
@@ -19,7 +20,7 @@ const STABLECOIN_ADDRESSES = [
 
 // NEW CONFIGURATION: Funnel filtering approach
 const CANDIDATE_POOL_LIMIT = 200; // Analyze top 200 volume pools for broader candidate pool
-const MIN_SAFETY_SCORE = 80;      // Only accept tokens with safety score > 80 (high safety)
+const MIN_SAFETY_SCORE = 70;      // Only accept tokens with safety score > 70 (moderate to high safety)
 const BATCH_SIZE = 10;            // Process tokens in batches to avoid rate limits
 const DELAY_MS = 300;             // Delay between API batches (300ms)
 
@@ -34,6 +35,8 @@ const chunkArray = <T>(array: T[], size: number): T[][] => {
 };
 
 export class TodaysPickService {
+  private tokenAnalyzer: TokenAnalyzer;
+
   constructor() {
     // Ensure Moralis is initialized
     if (!Moralis.Core.isStarted) {
@@ -41,6 +44,9 @@ export class TodaysPickService {
         logger.error('Failed to initialize Moralis in TodaysPickService', { error });
       });
     }
+
+    // Initialize TokenAnalyzer for rug alert safety score calculation
+    this.tokenAnalyzer = new TokenAnalyzer();
   }
 
   /**
@@ -124,7 +130,7 @@ export class TodaysPickService {
     }
     logger.info(`Step 2: Enriched ${enrichedPicks.length} tokens with Moralis data.`);
 
-    // STEP 3: Apply safety filter and rank by total trading activity (buyers + sellers)
+    // STEP 3: Apply initial safety filter and rank by total trading activity (buyers + sellers)
     const safeAndRankedPicks = enrichedPicks
       .filter(p => p.security_score && p.security_score > MIN_SAFETY_SCORE)
       .sort((a, b) => {
@@ -133,11 +139,53 @@ export class TodaysPickService {
         const totalActivityB = (b.totalBuyers?.['24h'] || 0) + (b.totalSellers?.['24h'] || 0);
         return totalActivityB - totalActivityA;
       });
-    
-    logger.info(`Step 3: Found ${safeAndRankedPicks.length} tokens with safety score > ${MIN_SAFETY_SCORE}.`);
+
+    logger.info(`Step 3: Found ${safeAndRankedPicks.length} tokens with initial safety score > ${MIN_SAFETY_SCORE}.`);
+
+    // STEP 3.5: Recalculate safety scores using rug alert methodology
+    logger.info('Step 3.5: Recalculating safety scores using rug alert methodology...');
+    const picksWithRugAlertScores: any[] = [];
+    const rugAlertBatches = chunkArray(safeAndRankedPicks, BATCH_SIZE);
+
+    for (const batch of rugAlertBatches) {
+      const batchPromises = batch.map(async (pick) => {
+        try {
+          // Use TokenAnalyzer to get comprehensive safety score
+          const rugAlertAnalysis = await this.tokenAnalyzer.analyzeToken(pick.address);
+
+          if (rugAlertAnalysis && rugAlertAnalysis.safetyScore >= MIN_SAFETY_SCORE) {
+            // Replace Moralis security_score with rug alert safetyScore
+            return {
+              ...pick,
+              security_score: rugAlertAnalysis.safetyScore, // Replace with recalculated score
+              rugAlertAnalysis: rugAlertAnalysis // Store full analysis for debugging if needed
+            };
+          }
+          return null; // Filter out tokens that don't meet safety threshold after recalculation
+        } catch (error) {
+          logger.warn(`Failed to recalculate safety score for ${pick.address}`, { error });
+          return null; // Skip tokens with analysis errors
+        }
+      });
+
+      const results = await Promise.all(batchPromises);
+      picksWithRugAlertScores.push(...results.filter(p => p !== null));
+
+      // Rate limiting: wait between batches
+      await delay(DELAY_MS);
+    }
+
+    // Re-rank by trading activity after recalculation
+    const rerankedPicks = picksWithRugAlertScores.sort((a, b) => {
+      const totalActivityA = (a.totalBuyers?.['24h'] || 0) + (a.totalSellers?.['24h'] || 0);
+      const totalActivityB = (b.totalBuyers?.['24h'] || 0) + (b.totalSellers?.['24h'] || 0);
+      return totalActivityB - totalActivityA;
+    });
+
+    logger.info(`Step 3.5: ${rerankedPicks.length} tokens passed rug alert safety score threshold (> ${MIN_SAFETY_SCORE}).`);
 
     // STEP 4: Finalize top 5 picks and cache results (include buyer and seller count data)
-    const finalPicks: TodaysPickData[] = safeAndRankedPicks.slice(0, 5).map(p => ({
+    const finalPicks: TodaysPickData[] = rerankedPicks.slice(0, 5).map(p => ({
       tokenAddress: p.address,
       name: p.name,
       symbol: p.symbol,
@@ -221,7 +269,7 @@ export class TodaysPickService {
 
   /**
    * Formats the picks into a Telegram message (HTML format)
-   * Updated to reflect new safety-first ranking approach
+   * Updated to reflect safety-first ranking with rug alert methodology
    */
   public async formatTodaysPicksMessage(ctx: Context, picks: TodaysPickData[]): Promise<string> {
     const lang = await getUserLanguage(ctx.from!.id);
@@ -230,9 +278,9 @@ export class TodaysPickService {
       return t(lang, 'todaysPick.noPicks');
     }
 
-    // Create header message explaining the new ranking methodology
+    // Create header message explaining the ranking methodology
     let message = `<b>🔥 Today's Top 5 Safe Picks on BSC</b>\n`;
-    message += `<i>(Ranked by 24h Trading Activity, Safety Score > ${MIN_SAFETY_SCORE})</i>\n\n`;
+    message += `<i>(Ranked by 24h Trading Activity, Rug Alert Safety Score > ${MIN_SAFETY_SCORE})</i>\n\n`;
 
     picks.forEach((pick, index) => {
       const safetyEmoji = this.getSafetyEmoji(pick.safetyScore);
@@ -260,22 +308,24 @@ export class TodaysPickService {
 
   /**
    * Returns appropriate emoji based on safety score
-   * Updated for high safety standards (all picks are > 80)
+   * Updated for moderate to high safety standards (all picks are > 70)
    */
   private getSafetyEmoji(score: number): string {
     if (score >= 90) return '🟢'; // Very Safe
-    if (score > 80) return '🟡'; // Safe
-    return '🟠'; // Moderate (shouldn't occur with MIN_SAFETY_SCORE = 80)
+    if (score >= 80) return '🟡'; // Safe
+    if (score >= 70) return '🟠'; // Moderate Risk
+    return '🔴'; // High Risk (shouldn't occur with MIN_SAFETY_SCORE = 70)
   }
 
   /**
    * Returns a short summary based on the safety score
-   * For high-safety picks (> 80)
+   * For moderate to high safety picks (> 70)
    */
   private getSafetySummary(score: number, lang: 'en' | 'zh'): string {
     if (score >= 90) return lang === 'zh' ? '非常安全' : 'Very Safe';
-    if (score > 80) return lang === 'zh' ? '比较安全' : 'Safe';
-    return lang === 'zh' ? '中等风险' : 'Moderate Risk';
+    if (score >= 80) return lang === 'zh' ? '比较安全' : 'Safe';
+    if (score >= 70) return lang === 'zh' ? '中等风险' : 'Moderate Risk';
+    return lang === 'zh' ? '高风险' : 'High Risk';
   }
 
   /**

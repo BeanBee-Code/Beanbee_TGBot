@@ -63,6 +63,7 @@ export const translations = {
       supportedWallets: 'Supported wallets: MetaMask, Trust Wallet, and more',
       connectionConfirmed: '_Connection will be confirmed automatically_',
       connectViaLink: '📲 Connect via Link Instead',
+      androidTelegramFix: '\n\n📱 *Android Users:* If the button doesn\'t work:\n1. Go to Telegram Settings → Chat Settings → Web Browser\n2. Turn OFF "Enable In-App Browser"\n3. Set "Open external links in" → "New Tabs in External Browser"\n4. Try connecting again',
       walletConnectionTimeout: '❌ Wallet connection timeout or rejected, please try again',
       errorConnectingWallet: '❌ Error connecting wallet, please try again',
       connectionLinkExpired: 'Connection link expired. Please try connecting again.',
@@ -100,8 +101,8 @@ export const translations = {
       connectTrustWallet: '🔷 Trust Wallet',
       connectOtherWallet: '🔗 Other Wallets',
       connectWalletConnect: '🔗 Other Wallets (QR Code)',
-      connectingToBinance: '🔗 *Connecting to Binance Wallet*\n\nScan the QR code with your Binance Wallet app, or click the button below on your mobile device.',
-      connectingToTrustWallet: '🔗 *Connecting to Trust Wallet*\n\nScan the QR code with your Trust Wallet app, or click the button below on your mobile device.',
+      connectingToBinance: '🔗 *Connecting to Binance Wallet*\n\nScan the QR code with your Binance Wallet app, or click the button below on your mobile device.\n\n📱 *Android Users:* If the button doesn\'t work:\n1. Go to Telegram Settings → Chat Settings → Web Browser\n2. Turn OFF "Enable In-App Browser"\n3. Set "Open external links in" → "New Tabs in External Browser"\n4. Try connecting again',
+      connectingToTrustWallet: '🔗 *Connecting to Trust Wallet*\n\nScan the QR code with your Trust Wallet app, or click the button below on your mobile device.\n\n📱 *Android Users:* If the button doesn\'t work:\n1. Go to Telegram Settings → Chat Settings → Web Browser\n2. Turn OFF "Enable In-App Browser"\n3. Set "Open external links in" → "New Tabs in External Browser"\n4. Try connecting again',
     },
     
     // Settings menu
@@ -652,6 +653,7 @@ export const translations = {
       supportedWallets: '支持的钱包：币安钱包、MetaMask、Trust Wallet 等',
       connectionConfirmed: '_连接将自动确认_',
       connectViaLink: '📲 通过链接连接',
+      androidTelegramFix: '\n\n📱 *安卓用户注意：* 如果按钮无法使用：\n1. 前往 Telegram 设置 → 聊天设置 → 网页浏览器\n2. 关闭"启用应用内浏览器"\n3. 将"在外部浏览器中打开链接"设为"在外部浏览器的新标签页中"\n4. 再次尝试连接',
       walletConnectionTimeout: '❌ 钱包连接超时或被拒绝，请重试',
       errorConnectingWallet: '❌ 连接钱包时出错，请重试',
       connectionLinkExpired: '连接链接已过期。请重新尝试连接。',
@@ -689,8 +691,8 @@ export const translations = {
       connectTrustWallet: '🔷 Trust Wallet',
       connectOtherWallet: '🔗 其他钱包',
       connectWalletConnect: '🔗 其他钱包 (二维码)',
-      connectingToBinance: '🔗 *连接币安钱包*\n\n请使用您的币安钱包App扫描此二维码，或者在手机上点击下方的按钮。',
-      connectingToTrustWallet: '🔗 *连接 Trust Wallet*\n\n请使用您的 Trust Wallet App 扫描此二维码，或者在手机上点击下方的按钮。',
+      connectingToBinance: '🔗 *连接币安钱包*\n\n请使用您的币安钱包App扫描此二维码，或者在手机上点击下方的按钮。\n\n📱 *安卓用户注意：* 如果按钮无法使用：\n1. 前往 Telegram 设置 → 聊天设置 → 网页浏览器\n2. 关闭"启用应用内浏览器"\n3. 将"在外部浏览器中打开链接"设为"在外部浏览器的新标签页中"\n4. 再次尝试连接',
+      connectingToTrustWallet: '🔗 *连接 Trust Wallet*\n\n请使用您的 Trust Wallet App 扫描此二维码，或者在手机上点击下方的按钮。\n\n📱 *安卓用户注意：* 如果按钮无法使用：\n1. 前往 Telegram 设置 → 聊天设置 → 网页浏览器\n2. 关闭"启用应用内浏览器"\n3. 将"在外部浏览器中打开链接"设为"在外部浏览器的新标签页中"\n4. 再次尝试连接',
     },
     
     // 设置菜单

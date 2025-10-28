@@ -12,6 +12,7 @@ import { TokenSearchService } from '../tokenSearch';
 import { getScannerConfig } from '@/config/scanner';
 import { DeadTokenModel } from '@/database/models/DeadToken';
 import { formatUSDValue, formatUSDValueWithSubscript } from './balance';
+import { hapiAddressRiskService } from '@/services/hapiLabs/addressRisk';
 
 const logger = createLogger('wallet.scanner');
 
@@ -372,28 +373,64 @@ export class ScannerService {
 			const { UserService } = await import('../user');
 			const userWalletAddress = session.address;
 			const userTradingWalletAddress = await UserService.getTradingWalletAddress(userId);
-			
+
 			// Check if the scanned address belongs to the user
-			const isUserWallet = 
+			const isUserWallet =
 				inputAddress.toLowerCase() === userWalletAddress?.toLowerCase() ||
 				inputAddress.toLowerCase() === userTradingWalletAddress?.toLowerCase();
 
 			await ctx.reply(await getTranslation(ctx, 'scanner.scanning'));
-			const tokensData = await getWalletTokensWithPrices(inputAddress);
 
-			let tokens: any[] = [];
-			if (Array.isArray(tokensData)) {
-				tokens = tokensData;
-			} else if (Array.isArray((tokensData as any).result)) {
-				tokens = (tokensData as any).result;
-			} else {
-				tokens = [];
+		// Check address risk in parallel with token fetch using allSettled to handle failures gracefully
+		const [tokensResult, addressRiskResult] = await Promise.allSettled([
+			getWalletTokensWithPrices(inputAddress),
+			hapiAddressRiskService.checkAddressRisk(inputAddress, 'bsc')
+		]);
+
+		// Extract address risk data if available
+		const addressRisk = addressRiskResult.status === 'fulfilled'
+			? addressRiskResult.value
+			: { hasData: false, risk: 0, riskLevel: 'SAFE' as const, category: 'Unknown', scamfari: false, riskDescriptionHeader: '', riskDescription: '', isSafe: true, isModerate: false, isRisky: false, address: inputAddress, network: 'bsc' };
+
+		// If token fetch failed, show address risk warning and error
+		if (tokensResult.status === 'rejected') {
+			let errorMessage = await getTranslation(ctx, 'scanner.errorScanning') + '\n';
+			errorMessage += await getTranslation(ctx, 'scanner.errorDetail') + ' ' + (tokensResult.reason?.message || String(tokensResult.reason)) + '\n';
+
+			// But still show address risk warning if it's risky!
+			if (addressRisk.hasData && addressRisk.risk >= 7) {
+				const riskEmoji = hapiAddressRiskService.getRiskEmoji(addressRisk.riskLevel);
+				errorMessage += `\n🚨 *CRITICAL SECURITY WARNING (HAPI Labs)*\n`;
+				errorMessage += `${riskEmoji} This address has a ${addressRisk.riskLevel} RISK score (${addressRisk.risk}/10)\n`;
+				errorMessage += `⚠️ Category: ${addressRisk.category}\n`;
+				if (addressRisk.riskDescription) {
+					errorMessage += `${addressRisk.riskDescription}\n`;
+				}
+				errorMessage += `\n⚠️ *Exercise extreme caution with this address!*\n`;
+			} else if (addressRisk.hasData && addressRisk.risk >= 4) {
+				const compactDisplay = hapiAddressRiskService.getCompactDisplay(addressRisk);
+				errorMessage += `\n🛡️ *Address Security:* ${compactDisplay} (HAPI Labs)\n`;
 			}
 
-			if (!tokens || tokens.length === 0) {
-				await ctx.reply(await getTranslation(ctx, 'scanner.noTokensFound'), { parse_mode: 'Markdown' });
-				return;
-			}
+			await ctx.reply(errorMessage, { parse_mode: 'Markdown' });
+			return;
+		}
+
+		// Extract tokens data
+		const tokensData = tokensResult.value;
+		let tokens: any[] = [];
+		if (Array.isArray(tokensData)) {
+			tokens = tokensData;
+		} else if (Array.isArray((tokensData as any).result)) {
+			tokens = (tokensData as any).result;
+		} else {
+			tokens = [];
+		}
+
+		if (!tokens || tokens.length === 0) {
+			await ctx.reply(await getTranslation(ctx, 'scanner.noTokensFound'), { parse_mode: 'Markdown' });
+			return;
+		}
 			
 			// Debug info
 			logger.info('Token scan results', { totalTokens: tokens.length });
@@ -734,8 +771,35 @@ export class ScannerService {
 				.slice(0, 9); // Show 9 other tokens + BNB = 10 total
 
 			let message = await getTranslation(ctx, 'scanner.tokenHoldings') + '\n';
-			message += `👛 \`${inputAddress.slice(0, 6)}...${inputAddress.slice(-4)}\`\n\n`;
-			message += await getTranslation(ctx, 'scanner.totalTokenValue') + ` ${formatUSDValue(totalValue)} ${t(lang, 'common.bscLabel')}\n\n`;
+			message += `👛 \`${inputAddress.slice(0, 6)}...${inputAddress.slice(-4)}\`\n`;
+
+			// Add address risk information if available
+			if (addressRisk.hasData) {
+				const riskEmoji = hapiAddressRiskService.getRiskEmoji(addressRisk.riskLevel);
+				const compactDisplay = hapiAddressRiskService.getCompactDisplay(addressRisk);
+
+				if (addressRisk.risk === 0) {
+					message += `🛡️ *Address Security:* ${compactDisplay} (HAPI Labs)\n`;
+				} else if (addressRisk.risk >= 7) {
+					// High risk or critical - show detailed warning
+					message += `\n🚨 *SECURITY ALERT (HAPI Labs)*\n`;
+					message += `${riskEmoji} ${addressRisk.riskLevel} RISK (${addressRisk.risk}/10)\n`;
+					message += `⚠️ Category: ${addressRisk.category}\n`;
+					if (addressRisk.riskDescription) {
+						message += `${addressRisk.riskDescription}\n`;
+					}
+					message += `\n⚠️ *Exercise extreme caution with this address!*\n`;
+				} else if (addressRisk.risk >= 4) {
+					// Medium risk - show warning
+					message += `🛡️ *Address Security:* ${compactDisplay} (HAPI Labs)\n`;
+					message += `ℹ️ ${addressRisk.riskDescription}\n`;
+				} else {
+					// Low risk - compact display
+					message += `🛡️ *Address Security:* ${compactDisplay} (HAPI Labs)\n`;
+				}
+			}
+
+			message += `\n` + await getTranslation(ctx, 'scanner.totalTokenValue') + ` ${formatUSDValue(totalValue)} ${t(lang, 'common.bscLabel')}\n\n`;
 
 			let index = 1;
 			if (bnbToken) {
@@ -1012,10 +1076,14 @@ export class ScannerService {
 			);
 			
 			await ctx.reply(await getTranslation(ctx, 'scanner.scanningMultiple', { count: addresses.length }));
-			
-			// Fetch tokens for all wallets in parallel
+
+			// Fetch tokens and address risk for all wallets in parallel
 			const allTokensPromises = addresses.map(address => getWalletTokensWithPrices(address));
-			const allTokensResults = await Promise.all(allTokensPromises);
+			const allRiskPromises = addresses.map(address => hapiAddressRiskService.checkAddressRisk(address, 'bsc'));
+			const [allTokensResults, allRiskResults] = await Promise.all([
+				Promise.all(allTokensPromises),
+				Promise.all(allRiskPromises)
+			]);
 			
 			// Combine all tokens from all wallets
 			const combinedTokens: { [key: string]: any } = {};
@@ -1188,8 +1256,40 @@ export class ScannerService {
 			addresses.forEach(addr => {
 				message += `• \`${addr.slice(0, 6)}...${addr.slice(-4)}\`\n`;
 			});
+
+			// Display address risk warnings if any wallets are risky
+			const riskyWallets = allRiskResults.filter((risk, index) => risk.hasData && risk.risk >= 4);
+			const criticalWallets = allRiskResults.filter((risk, index) => risk.hasData && risk.risk >= 7);
+
+			if (criticalWallets.length > 0) {
+				// Show critical risk warning
+				message += `\n🚨 *SECURITY ALERT (HAPI Labs)*\n`;
+				criticalWallets.forEach((risk, index) => {
+					const walletIndex = allRiskResults.indexOf(risk);
+					const addr = addresses[walletIndex];
+					const riskEmoji = hapiAddressRiskService.getRiskEmoji(risk.riskLevel);
+					message += `${riskEmoji} \`${addr.slice(0, 6)}...${addr.slice(-4)}\` - ${risk.riskLevel} (${risk.risk}/10) - ${risk.category}\n`;
+				});
+				message += `⚠️ *Exercise extreme caution with these addresses!*\n`;
+			} else if (riskyWallets.length > 0) {
+				// Show medium risk warning
+				message += `\n🛡️ *Address Risk Info (HAPI Labs)*\n`;
+				riskyWallets.forEach((risk, index) => {
+					const walletIndex = allRiskResults.indexOf(risk);
+					const addr = addresses[walletIndex];
+					const compactDisplay = hapiAddressRiskService.getCompactDisplay(risk);
+					message += `• \`${addr.slice(0, 6)}...${addr.slice(-4)}\` - ${compactDisplay}\n`;
+				});
+			} else {
+				// Check if we have any safe address data
+				const safeWallets = allRiskResults.filter(risk => risk.hasData && risk.risk === 0);
+				if (safeWallets.length > 0) {
+					message += `\n🛡️ All addresses verified safe (HAPI Labs)\n`;
+				}
+			}
+
 			message += `\n` + await getTranslation(ctx, 'scanner.totalCombinedValue') + ` ${formatUSDValue(totalValueAllWallets)} ${t(lang, 'common.bscLabel')}\n\n`;
-			
+
 			let index = 1;
 			if (bnbToken) {
 				const balance = formatTokenBalance(bnbToken.balance, bnbToken.decimals || 18);

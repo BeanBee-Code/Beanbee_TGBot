@@ -1035,18 +1035,19 @@ export function setupCallbacks(
 				const tokenAddress = match[1];
 				const userId = ctx.from!.id;
 				const session = global.userSessions.get(userId);
-				
+
 				if (session?.rugAlerts?.lastAnalysis && session.rugAlerts.lastAnalysis.metadata.address === tokenAddress) {
 					const analysis = session.rugAlerts.lastAnalysis;
 					const summary = rugAlertsService.generateNaturalSummary(analysis);
-					
+
 					const keyboard = {
 						inline_keyboard: [
 							[{ text: '📋 View Detailed Report', callback_data: `rug_details:${tokenAddress}` }],
+							[{ text: '🤖 ChainGPT SC Audit', callback_data: `chaingpt_audit:${tokenAddress}` }],
 							[{ text: '🔙 Back', callback_data: 'start_edit' }]
 						]
 					};
-					
+
 					await ctx.editMessageText(summary, {
 						reply_markup: keyboard,
 						parse_mode: 'Markdown'
@@ -1058,6 +1059,76 @@ export function setupCallbacks(
 		} catch (error) {
 			logger.error('Error showing rug alert summary', { error });
 			await ctx.answerCbQuery('❌ Error showing summary');
+		}
+	});
+
+	// ChainGPT Smart Contract Audit
+	bot.action(/^chaingpt_audit:(.+)$/, async (ctx) => {
+		try {
+			const match = ctx.match;
+			if (match && match[1]) {
+				const tokenAddress = match[1];
+				await rugAlertsService.handleChainGPTAudit(ctx, tokenAddress);
+			}
+		} catch (error) {
+			logger.error('Error performing ChainGPT audit', { error });
+			await ctx.answerCbQuery('❌ Error performing audit');
+		}
+	});
+
+	// Today's News
+	handleCallback('todays_news', async (ctx) => {
+		try {
+			await ctx.answerCbQuery();
+			await ctx.editMessageText('⏳ Fetching today\'s crypto news...');
+
+			const { chainGPTNewsService } = await import('../../services/chainGPT/newsService');
+
+			if (!chainGPTNewsService.isAvailable()) {
+				await ctx.editMessageText(
+					'❌ News Service Unavailable\n\n' +
+					'The news service is not configured.\n' +
+					'Please contact the administrator.',
+					Markup.inlineKeyboard([
+						[Markup.button.callback('🔙 Back to Menu', 'main_menu')]
+					])
+				);
+				return;
+			}
+
+			const result = await chainGPTNewsService.getTodaysNews();
+
+			if (!result.success || !result.news || result.news.length === 0) {
+				await ctx.editMessageText(
+					`❌ Failed to fetch news\n\n${result.error || 'No news available'}`,
+					Markup.inlineKeyboard([
+						[Markup.button.callback('🔙 Back to Menu', 'main_menu')]
+					])
+				);
+				return;
+			}
+
+			const message = chainGPTNewsService.formatNewsForTelegram(result.news, result.fromCache);
+
+			await ctx.editMessageText(
+				message,
+				{
+					parse_mode: 'Markdown',
+					link_preview_options: { is_disabled: true },
+					...Markup.inlineKeyboard([
+						[Markup.button.callback('🔄 Refresh', 'todays_news')],
+						[Markup.button.callback('🔙 Back to Menu', 'main_menu')]
+					])
+				}
+			);
+		} catch (error) {
+			logger.error('Error fetching today\'s news', { error });
+			await ctx.editMessageText(
+				'❌ Error fetching news. Please try again later.',
+				Markup.inlineKeyboard([
+					[Markup.button.callback('🔙 Back to Menu', 'main_menu')]
+				])
+			);
 		}
 	});
 
