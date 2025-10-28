@@ -92,15 +92,23 @@ export class RugAlertsService {
   }
 
   generateNaturalSummary(analysis: RugAlertAnalysis, lang: Language = 'en'): string {
-    const { metadata, holderAnalysis, liquidityAnalysis, tradingActivity, honeypotAnalysis, safetyScore } = analysis;
-    
+    const { metadata, holderAnalysis, liquidityAnalysis, tradingActivity, honeypotAnalysis, safetyScore, scSecurityAnalysis } = analysis;
+
     let summary = '';
-    
+
+    // Use the same effective liquidity calculation as the safety score and display
+    const effectiveLiquidityUSD = (tradingActivity.totalLiquidityUsd && tradingActivity.totalLiquidityUsd > 0)
+      ? tradingActivity.totalLiquidityUsd
+      : liquidityAnalysis.liquidityUSD;
+
     // Start with token name and overall assessment
     const safetyLevel = this.getSafetyLevel(safetyScore);
     const safetyEmoji = this.getSafetyEmoji(safetyScore);
-    
-    if (honeypotAnalysis.isHoneypot) {
+
+    // Check for critical SC vulnerabilities first
+    if (scSecurityAnalysis && scSecurityAnalysis.hasData && scSecurityAnalysis.securityIssues.critical.length > 0) {
+      summary = `🚨 **CRITICAL SECURITY WARNING**: ${metadata.name} (${metadata.symbol}) has ${scSecurityAnalysis.securityIssues.critical.length} critical smart contract vulnerabilit${scSecurityAnalysis.securityIssues.critical.length > 1 ? 'ies' : 'y'}! This token may be unsafe to trade.\n\n`;
+    } else if (honeypotAnalysis.isHoneypot) {
       summary = `🚫 **WARNING**: ${metadata.name} (${metadata.symbol}) is a HONEYPOT! You cannot sell this token after buying. Do NOT invest in this token.\n\n`;
     } else if (safetyScore >= 70) {
       summary = `${safetyEmoji} ${metadata.name} (${metadata.symbol}) appears to be relatively safe with a score of ${safetyScore}/100. `;
@@ -109,28 +117,28 @@ export class RugAlertsService {
     } else {
       summary = `${safetyEmoji} ${metadata.name} (${metadata.symbol}) shows high risk indicators with a score of ${safetyScore}/100. `;
     }
-    
+
     // Add key insights
     const insights = [];
-    
+
     // Honeypot status
     if (!honeypotAnalysis.isHoneypot) {
       if (honeypotAnalysis.sellTax && honeypotAnalysis.sellTax > 10) {
         insights.push(`has a high sell tax of ${honeypotAnalysis.sellTax}%`);
       }
-      
+
       // Holder concentration
       if (holderAnalysis.top10ConcentrationExcludingLP > 50) {
         insights.push('is heavily concentrated among top holders');
       } else if (holderAnalysis.top10ConcentrationExcludingLP < 20) {
         insights.push('has good holder distribution');
       }
-      
-      // Liquidity status
+
+      // Liquidity status - use effective liquidity
       if (!liquidityAnalysis.hasLiquidity) {
         insights.push('has no liquidity pool');
-      } else if (liquidityAnalysis.liquidityUSD && liquidityAnalysis.liquidityUSD < 10000) {
-        insights.push(`has very low liquidity ($${this.formatNumber(liquidityAnalysis.liquidityUSD)})`);
+      } else if (effectiveLiquidityUSD && effectiveLiquidityUSD < 10000) {
+        insights.push(`has very low liquidity ($${this.formatNumber(effectiveLiquidityUSD)})`);
       } else if (liquidityAnalysis.lpTokenBurned) {
         insights.push('has permanently locked liquidity');
       } else if (!liquidityAnalysis.lpTokenLocked && !liquidityAnalysis.lpTokenBurned) {
@@ -189,8 +197,8 @@ export class RugAlertsService {
     // Add key metrics
     summary += '\n\n📊 **Key Metrics (BSC Chain):**\n';
     summary += `• Holders: ${holderAnalysis.totalHolders.toLocaleString()}\n`;
-    if (liquidityAnalysis.liquidityUSD) {
-      summary += `• Liquidity: ${this.formatNumber(liquidityAnalysis.liquidityUSD)}\n`;
+    if (effectiveLiquidityUSD) {
+      summary += `• Liquidity: ${this.formatNumber(effectiveLiquidityUSD)}\n`;
     }
     if (tradingActivity.volume24h) {
       summary += `• 24h Volume: ${this.formatNumber(tradingActivity.volume24h)}\n`;
@@ -212,10 +220,11 @@ export class RugAlertsService {
     // Generate natural language summary
     const summary = this.generateNaturalSummary(analysis, lang);
     
-    // Send summary with details button
+    // Send summary with details and audit buttons
     const keyboard = {
       inline_keyboard: [
         [{ text: '📋 View Detailed Report', callback_data: `rug_details:${metadata.address}` }],
+        [{ text: '🤖 ChainGPT SC Audit', callback_data: `chaingpt_audit:${metadata.address}` }],
         [{ text: '🔙 Back', callback_data: 'start_edit' }]
       ]
     };
@@ -291,14 +300,9 @@ export class RugAlertsService {
     message += `${safetyEmoji} ${safetyScore}/100 (${safetyLevel})\n\n`;
     
     message += `📊 *Safety Breakdown:*\n`;
-    message += `• Holder Distribution: ${safetyScoreDetails.holders}/15\n`;
-    message += `• Liquidity Security: ${safetyScoreDetails.liquidity}/25\n`;
-    message += `• Contract Verification: ${safetyScoreDetails.verification}/10\n`;
-    message += `• Ownership Status: ${safetyScoreDetails.ownership}/10\n`;
-    message += `• Trading Activity: ${safetyScoreDetails.trading}/10\n`;
-    message += `• Token Age: ${safetyScoreDetails.age}/10\n`;
-    message += `• Honeypot Check: ${safetyScoreDetails.honeypot}/15\n`;
-    message += `• Diamond Hands: ${(safetyScoreDetails as any).diamondHands || 0}/5\n`;
+    message += `• Holders: ${safetyScoreDetails.holders}/15 • Liquidity: ${safetyScoreDetails.liquidity}/20 • Verification: ${safetyScoreDetails.verification}/10\n`;
+    message += `• Ownership: ${safetyScoreDetails.ownership}/10 • Trading: ${safetyScoreDetails.trading}/10 • Age: ${safetyScoreDetails.age}/10\n`;
+    message += `• Honeypot: ${safetyScoreDetails.honeypot}/10 • Diamond Hands: ${safetyScoreDetails.diamondHands || 0}/5\n`;
     message += `\n`;
 
     // Swap Analysis Section
@@ -325,6 +329,48 @@ export class RugAlertsService {
       }
     }
     message += `\n`;
+
+    // Smart Contract Security Section (HAPI Labs)
+    if (analysis.scSecurityAnalysis && analysis.scSecurityAnalysis.hasData) {
+      const scAnalysis = analysis.scSecurityAnalysis;
+
+      // Overall SC risk level with score
+      const scRiskEmoji = scAnalysis.riskLevel === 'SAFE' ? '✅' :
+                          scAnalysis.riskLevel === 'LOW' ? '🟢' :
+                          scAnalysis.riskLevel === 'MEDIUM' ? '🟡' :
+                          scAnalysis.riskLevel === 'HIGH' ? '🟠' : '🔴';
+
+      message += `🛡️ *SMART CONTRACT SECURITY* (HAPI Labs)\n`;
+      message += `${scRiskEmoji} ${scAnalysis.riskLevel} — ${scAnalysis.securityScore}/15\n`;
+
+      // Critical vulnerabilities
+      if (scAnalysis.securityIssues.critical.length > 0) {
+        message += `\n🚨 *CRITICAL:* ${scAnalysis.securityIssues.critical.map((i: string) => i.split(':')[0]).join(', ')}\n`;
+      }
+
+      // High-risk patterns
+      if (scAnalysis.securityIssues.high.length > 0) {
+        const highRiskNames = scAnalysis.securityIssues.high.slice(0, 3).map((i: string) => i.split(':')[0]);
+        const remaining = scAnalysis.securityIssues.high.length - 3;
+        message += `⚠️ *High-Risk:* ${highRiskNames.join(', ')}${remaining > 0 ? ` (+${remaining} more)` : ''}\n`;
+      }
+
+      // Medium-risk issues (condensed)
+      if (scAnalysis.securityIssues.medium.length > 0) {
+        message += `ℹ️ *Medium-Risk:* ${scAnalysis.securityIssues.medium.length} detected\n`;
+      }
+
+      // Positive security features (only if no critical issues)
+      if (scAnalysis.positiveFeatures.length > 0 && scAnalysis.securityIssues.critical.length === 0 && scAnalysis.securityIssues.high.length === 0) {
+        message += `✅ ${scAnalysis.positiveFeatures.slice(0, 2).join(' • ')}\n`;
+      }
+
+      message += `\n`;
+    } else {
+      // SC security screening not available
+      message += `🛡️ *SMART CONTRACT SECURITY*\n`;
+      message += `ℹ️ Advanced screening unavailable (Basic analysis above)\n\n`;
+    }
 
     // Holder Analysis Section
     message += `👥 *HOLDER ANALYSIS*\n`;
@@ -364,18 +410,23 @@ export class RugAlertsService {
       message += `⚠️ Cannot trade this token on DEXs\n`;
     } else {
       message += `✅ ${liquidityAnalysis.liquidityPools.length} liquidity pool(s) found\n`;
-      
-      if (liquidityAnalysis.liquidityUSD) {
-        message += `💰 Total Liquidity: ${this.formatNumber(liquidityAnalysis.liquidityUSD)} (${t(lang, 'common.bscLabel')})\n`;
-        
+
+      // Use single liquidity source: prefer tradingActivity (DexScreener) over liquidityAnalysis
+      const liquidityUSD = (tradingActivity.totalLiquidityUsd && tradingActivity.totalLiquidityUsd > 0)
+        ? tradingActivity.totalLiquidityUsd
+        : liquidityAnalysis.liquidityUSD;
+
+      if (liquidityUSD) {
+        message += `💰 Total Liquidity: $${this.formatNumber(liquidityUSD)}\n`;
+
         // Liquidity health check
-        if (liquidityAnalysis.liquidityUSD < 1000) {
+        if (liquidityUSD < 1000) {
           message += `⚠️ EXTREMELY LOW - High slippage expected\n`;
-        } else if (liquidityAnalysis.liquidityUSD < 10000) {
+        } else if (liquidityUSD < 10000) {
           message += `⚠️ VERY LOW - Significant slippage expected\n`;
-        } else if (liquidityAnalysis.liquidityUSD < 50000) {
+        } else if (liquidityUSD < 50000) {
           message += `⚠️ LOW - Moderate slippage expected\n`;
-        } else if (liquidityAnalysis.liquidityUSD < 100000) {
+        } else if (liquidityUSD < 100000) {
           message += `✅ ADEQUATE - Normal trading conditions\n`;
         } else {
           message += `✅ GOOD - Healthy liquidity\n`;
@@ -409,86 +460,64 @@ export class RugAlertsService {
     }
     message += `\n`;
 
-    // Trading Activity Section
+    // Trading Activity Section - Condensed
     message += `📈 *TRADING ACTIVITY (24H)*\n`;
-    if (!tradingActivity.hasActiveTrading) {
-      message += `⚠️ Low or no trading activity detected\n`;
-    } else {
-      message += `✅ Active trading detected\n`;
-    }
+
+    // Build compact stats line
+    const stats: string[] = [];
     if (tradingActivity.txCount24h !== undefined) {
-      message += `🔄 Transactions: ${tradingActivity.txCount24h}\n`;
+      stats.push(`${this.formatNumber(tradingActivity.txCount24h)} tx`);
     }
     if (tradingActivity.uniqueTraders24h !== undefined) {
-      message += `👥 Unique Traders: ${tradingActivity.uniqueTraders24h}\n`;
+      stats.push(`${this.formatNumber(tradingActivity.uniqueTraders24h)} traders`);
     }
     if (tradingActivity.volume24h !== undefined && tradingActivity.volume24h > 0) {
-      message += `💵 Volume: $${this.formatNumber(tradingActivity.volume24h)}\n`;
+      stats.push(`$${this.formatNumber(tradingActivity.volume24h)} vol`);
     }
     if (tradingActivity.priceChange24h !== undefined && tradingActivity.priceChange24h !== null) {
       const priceChange = Number(tradingActivity.priceChange24h);
       if (!isNaN(priceChange)) {
         const priceChangeEmoji = priceChange >= 0 ? '📈' : '📉';
-        message += `${priceChangeEmoji} Price Change: ${priceChange.toFixed(2)}%\n`;
+        stats.push(`${priceChangeEmoji}${priceChange > 0 ? '+' : ''}${priceChange.toFixed(1)}%`);
       }
     }
+
+    if (stats.length > 0) {
+      const statusIcon = tradingActivity.hasActiveTrading ? '✅' : '⚠️';
+      message += `${statusIcon} ${stats.join(' • ')}\n`;
+    } else {
+      message += `⚠️ No trading activity detected\n`;
+    }
     
-    // Liquidity vs Volume Analysis
-    if (tradingActivity.liquidityToVolumeRatio !== undefined && tradingActivity.totalLiquidityUsd !== undefined) {
-      message += `\n💧 *LIQUIDITY EFFICIENCY*\n`;
-      message += `• Total Liquidity: $${this.formatNumber(tradingActivity.totalLiquidityUsd)}\n`;
-      if (tradingActivity.volume24h && tradingActivity.volume24h > 0) {
-        message += `• Liquidity/Volume Ratio: ${tradingActivity.liquidityToVolumeRatio.toFixed(2)}x\n`;
-        
-        // Efficiency interpretation
-        const efficiency = tradingActivity.liquidityEfficiency;
-        let efficiencyEmoji = '';
-        let efficiencyText = '';
-        
-        switch (efficiency) {
-          case 'EXCELLENT':
-            efficiencyEmoji = '🟢';
-            efficiencyText = 'EXCELLENT - Optimal trading conditions';
-            break;
-          case 'GOOD':
-            efficiencyEmoji = '🟢';
-            efficiencyText = 'GOOD - Healthy liquidity for volume';
-            break;
-          case 'ADEQUATE':
-            efficiencyEmoji = '🟡';
-            efficiencyText = 'ADEQUATE - Acceptable trading conditions';
-            break;
-          case 'POOR':
-            efficiencyEmoji = '🟠';
-            efficiencyText = 'POOR - Liquidity may be excessive for activity';
-            break;
-          case 'CRITICAL':
-            efficiencyEmoji = '🔴';
-            efficiencyText = 'CRITICAL - Insufficient liquidity or excessive volume';
-            break;
-          default:
-            efficiencyEmoji = '❓';
-            efficiencyText = 'Unknown efficiency';
+    // Liquidity Efficiency Analysis (if volume data available)
+    if (tradingActivity.volume24h && tradingActivity.volume24h > 0) {
+      // Use same liquidity source as above
+      const liquidityUSD = (tradingActivity.totalLiquidityUsd && tradingActivity.totalLiquidityUsd > 0)
+        ? tradingActivity.totalLiquidityUsd
+        : liquidityAnalysis.liquidityUSD;
+
+      if (liquidityUSD) {
+        const ratio = liquidityUSD / tradingActivity.volume24h;
+
+        // Use existing efficiency if available, otherwise calculate
+        let efficiency = tradingActivity.liquidityEfficiency;
+        if (!efficiency) {
+          if (ratio >= 20) efficiency = 'ADEQUATE';
+          else if (ratio >= 5) efficiency = 'GOOD';
+          else if (ratio >= 3) efficiency = 'EXCELLENT';
+          else efficiency = 'CRITICAL';
         }
-        
-        message += `• Efficiency: ${efficiencyEmoji} ${efficiencyText}\n`;
-      } else {
-        message += `• No volume data available for ratio calculation\n`;
-      }
-    } else if (liquidityAnalysis.liquidityUSD && tradingActivity.volume24h && tradingActivity.volume24h > 0) {
-      // Fallback calculation using existing liquidity data
-      const ratio = liquidityAnalysis.liquidityUSD / tradingActivity.volume24h;
-      message += `\n💧 *LIQUIDITY EFFICIENCY*\n`;
-      message += `• Liquidity/Volume Ratio: ${ratio.toFixed(2)}x\n`;
-      
-      if (ratio >= 20) {
-        message += `• Efficiency: 🟡 ADEQUATE - Standard liquidity coverage\n`;
-      } else if (ratio >= 5) {
-        message += `• Efficiency: 🟢 GOOD - Healthy liquidity efficiency\n`;
-      } else if (ratio >= 3) {
-        message += `• Efficiency: 🟢 EXCELLENT - Optimal trading efficiency\n`;
-      } else {
-        message += `• Efficiency: 🔴 CRITICAL - Low liquidity for volume\n`;
+
+        const efficiencyMap: Record<string, { emoji: string; text: string }> = {
+          'EXCELLENT': { emoji: '🟢', text: 'Optimal trading' },
+          'GOOD': { emoji: '🟢', text: 'Healthy efficiency' },
+          'ADEQUATE': { emoji: '🟡', text: 'Standard coverage' },
+          'POOR': { emoji: '🟠', text: 'May be excessive' },
+          'CRITICAL': { emoji: '🔴', text: 'Insufficient' }
+        };
+
+        const effInfo = efficiencyMap[efficiency] || { emoji: '❓', text: 'Unknown' };
+        message += `🔁 Liq/Vol Ratio: ${ratio.toFixed(1)}x ${effInfo.emoji} ${effInfo.text}\n`;
       }
     }
     message += `\n`;
@@ -581,6 +610,7 @@ export class RugAlertsService {
     const keyboard = {
       inline_keyboard: [
         [{ text: '📊 View Summary', callback_data: `rug_summary:${metadata.address}` }],
+        [{ text: '🤖 ChainGPT SC Audit', callback_data: `chaingpt_audit:${metadata.address}` }],
         [{ text: '🔍 Analyze Another Token', callback_data: 'rug_alerts' }],
         [{ text: '🔙 Back to Menu', callback_data: 'start_edit' }]
       ]
@@ -643,5 +673,145 @@ export class RugAlertsService {
     if (safetyScore >= 40) return 'MEDIUM RISK';
     if (safetyScore >= 20) return 'HIGH RISK';
     return 'CRITICAL RISK';
+  }
+
+  /**
+   * Handles ChainGPT smart contract audit request
+   */
+  async handleChainGPTAudit(ctx: Context, tokenAddress: string) {
+    const userId = ctx.from!.id;
+
+    try {
+      // Answer callback query immediately
+      await ctx.answerCbQuery('Starting ChainGPT AI audit...');
+
+      // Show loading message
+      await ctx.editMessageText(
+        '🤖 *ChainGPT AI Smart Contract Audit*\n\n' +
+        '⏳ Fetching contract source code and performing AI analysis...\n\n' +
+        'This may take 30-60 seconds. Please wait...',
+        { parse_mode: 'Markdown' }
+      );
+
+      // Import ChainGPT auditor
+      const { chainGPTAuditor } = await import('@/services/chainGPT/smartContractAuditor');
+
+      // Check if service is available
+      if (!chainGPTAuditor.isAvailable()) {
+        await ctx.editMessageText(
+          '❌ *ChainGPT Audit Unavailable*\n\n' +
+          'The ChainGPT smart contract auditor is not configured.\n\n' +
+          'Please contact the administrator to add the CHAINGPT_API_KEY.',
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🔙 Back to Analysis', callback_data: `rug_details:${tokenAddress}` }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+
+      // Perform the audit (BSC chain ID = 56)
+      const auditResult = await chainGPTAuditor.auditContractByAddress(tokenAddress, 56);
+
+      if (!auditResult.success) {
+        await ctx.editMessageText(
+          '❌ *ChainGPT Audit Failed*\n\n' +
+          `${auditResult.error || 'Unknown error occurred'}\n\n` +
+          '_Tip: Make sure the contract is verified on BSCScan._',
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🔙 Back to Analysis', callback_data: `rug_details:${tokenAddress}` }]
+              ]
+            }
+          }
+        );
+        return;
+      }
+
+      // Format and send the audit report
+      await this.sendChainGPTAuditReport(ctx, tokenAddress, auditResult);
+
+    } catch (error) {
+      logger.error('Error performing ChainGPT audit', {
+        tokenAddress,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      await ctx.editMessageText(
+        '❌ *Error Performing Audit*\n\n' +
+        'An unexpected error occurred while auditing the contract.\n\n' +
+        `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔙 Back to Analysis', callback_data: `rug_details:${tokenAddress}` }]
+            ]
+          }
+        }
+      );
+    }
+  }
+
+  /**
+   * Formats and sends the ChainGPT audit report
+   */
+  private async sendChainGPTAuditReport(ctx: Context, tokenAddress: string, auditResult: any) {
+    const report = auditResult.auditReport;
+    const summary = auditResult.summary;
+
+    // Telegram message limit is 4096 characters
+    const maxLength = 4000;
+
+    // Use plain text to avoid markdown parsing issues
+    let message = '🤖 ChainGPT AI Smart Contract Audit\n';
+    message += `Contract: ${tokenAddress}\n\n`;
+
+    if (summary) {
+      message += `${summary}\n\n`;
+    }
+
+    message += '📋 Full Audit Report:\n\n';
+
+    // Add the audit report, truncating if necessary
+    if (report.length + message.length > maxLength) {
+      const availableLength = maxLength - message.length - 100; // Leave room for truncation notice
+      message += report.substring(0, availableLength);
+      message += '\n\n[Report truncated due to length. Key findings shown above.]';
+    } else {
+      message += report;
+    }
+
+    message += '\n\n⚠️ Disclaimer: This audit is AI-generated and should be used as a supplementary tool. Always conduct professional audits for production contracts.';
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '📋 Back to Detailed Report', callback_data: `rug_details:${tokenAddress}` }],
+        [{ text: '📊 View Summary', callback_data: `rug_summary:${tokenAddress}` }],
+        [{ text: '🔙 Back to Menu', callback_data: 'start_edit' }]
+      ]
+    };
+
+    // If message is still too long, split it
+    if (message.length > 4096) {
+      // Send in two parts
+      const part1 = message.substring(0, 4000);
+      const part2 = message.substring(4000);
+
+      await ctx.editMessageText(part1); // No parse_mode = plain text
+      await ctx.reply(part2, {
+        reply_markup: keyboard
+      });
+    } else {
+      await ctx.editMessageText(message, {
+        reply_markup: keyboard
+      });
+    }
   }
 }
