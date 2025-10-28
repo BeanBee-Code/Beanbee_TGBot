@@ -46,6 +46,8 @@ Create a `.env` file with these required variables:
 - `TAVILY_API_KEY` - (Optional) Tavily API key for daily BSC news and yield opportunities in summaries
 - `COINGECKO_API_KEY` - (Optional) CoinGecko Pro API key for enhanced token holder analysis
 - `NODEREAL_API_KEY` - NodeReal API key for opBNB Layer 2 functionality (balances, transactions, token data)
+- `HAPI_LABS_API_KEY` - (Optional) HAPI Labs API key for advanced smart contract security screening in rug alerts
+- `HAPI_LABS_API_URL` - (Optional) HAPI Labs API URL (default: https://research.hapilabs.one)
 
 ### API Server Configuration
 
@@ -95,6 +97,8 @@ This is a Telegram bot for BSC (Binance Smart Chain) cryptocurrency trading with
 - **staking/**: Staking position detection and analysis
 - **defiLlama/yieldService.ts**: DeFiLlama API integration for yield data
 - **news/tavilyService.ts**: Tavily API integration for BSC news and yield opportunities
+- **hapiLabs/**: HAPI Labs smart contract security screening service
+- **rugAlerts/**: Rug pull detection with holder analysis, liquidity checks, honeypot detection, and SC security screening
 
 ### Telegram Bot Layer (`src/telegram/`)
 - **bot.ts**: Main bot class with session management
@@ -131,6 +135,16 @@ This is a Telegram bot for BSC (Binance Smart Chain) cryptocurrency trading with
 - **Web dApp Interface**: Hosted at `/connect-binance.html` for Binance Wallet connections
 - **Provider Tracking**: Database stores wallet connection provider type (`walletconnect` or `binance`)
 - **Seamless Experience**: Users can choose between QR code scanning or browser-based connection
+
+### HAPI Labs Smart Contract Security Screening (`src/services/hapiLabs/`)
+- **Professional Security Analysis**: Integrates HAPI Labs API for advanced smart contract vulnerability detection
+- **25+ Security Checks**: Detects reentrancy, vulnerable withdrawals, approval vulnerabilities, blacklisting, mintable/pausable/upgradable patterns, transfer fees, cooldowns, mixer usage, owner scams, and more
+- **Risk Categorization**: Categorizes findings as Critical, High, Medium, Low, or Informational
+- **Intelligent Caching**: MongoDB-based caching with 7-day TTL to minimize API calls (SCSecurityCache model)
+- **Graceful Degradation**: Falls back to basic honeypot detection if HAPI Labs API is unavailable
+- **Safety Score Integration**: Contributes 15 points to the 100-point safety score in rug alerts
+- **Detailed Reporting**: Displays critical vulnerabilities, high-risk patterns, medium issues, and positive features
+- **BSC Support**: Currently supports BSC chain with extensible design for other chains
 
 ## Key Architectural Patterns
 
