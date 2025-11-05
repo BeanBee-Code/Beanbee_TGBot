@@ -3,7 +3,12 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('database');
 
-export async function connectDatabase() {
+let isConnected = false;
+let connectionRetries = 0;
+const MAX_RETRIES = 10;
+const RETRY_DELAY = 10000; // 10 seconds
+
+export async function connectDatabase(throwOnError = false) {
   try {
     let mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/';
     
@@ -23,7 +28,8 @@ export async function connectDatabase() {
 
     logger.info('🔗 Connecting to MongoDB', { 
       uri: mongoUri.replace(/:[^:]*@/, ':***@'),
-      environment: process.env.NODE_ENV || 'development'
+      environment: process.env.NODE_ENV || 'development',
+      attempt: connectionRetries + 1
     });
 
     await mongoose.connect(mongoUri, {
@@ -33,10 +39,35 @@ export async function connectDatabase() {
     });
 
     logger.info('✅ Connected to MongoDB');
-  } catch (error) {
+    isConnected = true;
+    connectionRetries = 0;
+  } catch (error: any) {
     logger.error('Failed to connect to MongoDB', error);
-    throw error;
+    
+    // Check if this is an IP whitelist error
+    if (error.message?.includes('IP') || error.message?.includes('whitelist')) {
+      logger.error('⚠️  MongoDB Atlas IP Whitelist Error - Please add Cloud Run IPs to your Atlas cluster');
+      logger.error('   Instructions: https://www.mongodb.com/docs/atlas/security-whitelist/');
+      logger.error('   Tip: Add 0.0.0.0/0 to allow all IPs (for testing) or specific Cloud Run IP ranges');
+    }
+    
+    if (throwOnError) {
+      throw error;
+    }
+    
+    // Retry logic
+    if (connectionRetries < MAX_RETRIES) {
+      connectionRetries++;
+      logger.warn(`Retrying database connection in ${RETRY_DELAY / 1000} seconds... (Attempt ${connectionRetries}/${MAX_RETRIES})`);
+      setTimeout(() => connectDatabase(false), RETRY_DELAY);
+    } else {
+      logger.error('Max database connection retries reached. Application will continue without database.');
+    }
   }
+}
+
+export function isDatabaseConnected(): boolean {
+  return isConnected && mongoose.connection.readyState === 1;
 }
 
 export async function disconnectDatabase() {

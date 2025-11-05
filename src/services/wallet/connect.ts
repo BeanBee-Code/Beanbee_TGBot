@@ -406,6 +406,7 @@ export class WalletService {
 			});
 
 			// Handle wallet connection approval
+			// Wrap in try-catch to prevent unhandled rejections from crashing the app
 			approval()
 				.then(async (walletSession) => {
 					logger.info('✅ BINANCE WALLET APPROVED CONNECTION', {
@@ -448,12 +449,25 @@ export class WalletService {
 					client.on('session_delete', sessionDeleteHandler);
 				})
 				.catch(async (error) => {
-					logger.error('❌ BINANCE WALLET APPROVAL ERROR', {
-						userId,
-						error: error instanceof Error ? error.message : String(error),
-					});
-					const timeoutMsg = await getTranslation(ctx, 'wallet.walletConnectionTimeout');
-					await ctx.reply(timeoutMsg);
+					// Handle wallet connection timeout/rejection gracefully
+					const errorMessage = error instanceof Error ? error.message : String(error);
+
+					// Only log if it's not a common timeout error
+					if (!errorMessage.includes('Proposal expired')) {
+						logger.error('❌ BINANCE WALLET APPROVAL ERROR', {
+							userId,
+							error: errorMessage,
+						});
+					} else {
+						logger.debug('Binance Wallet connection timeout (proposal expired)', { userId });
+					}
+
+					try {
+						const timeoutMsg = await getTranslation(ctx, 'wallet.walletConnectionTimeout');
+						await ctx.reply(timeoutMsg);
+					} catch (replyError) {
+						logger.debug('Failed to send timeout message', { userId, error: replyError });
+					}
 					this.userSessions.delete(userId);
 				});
 
@@ -512,6 +526,7 @@ export class WalletService {
 			});
 
 			// Handle wallet connection approval
+			// Wrap in try-catch to prevent unhandled rejections from crashing the app
 			approval()
 				.then(async (walletSession) => {
 					logger.info('✅ TRUST WALLET APPROVED CONNECTION', {
@@ -554,12 +569,25 @@ export class WalletService {
 					client.on('session_delete', sessionDeleteHandler);
 				})
 				.catch(async (error) => {
-					logger.error('❌ TRUST WALLET APPROVAL ERROR', {
-						userId,
-						error: error instanceof Error ? error.message : String(error),
-					});
-					const timeoutMsg = await getTranslation(ctx, 'wallet.walletConnectionTimeout');
-					await ctx.reply(timeoutMsg);
+					// Handle wallet connection timeout/rejection gracefully
+					const errorMessage = error instanceof Error ? error.message : String(error);
+
+					// Only log if it's not a common timeout error
+					if (!errorMessage.includes('Proposal expired')) {
+						logger.error('❌ TRUST WALLET APPROVAL ERROR', {
+							userId,
+							error: errorMessage,
+						});
+					} else {
+						logger.debug('Trust Wallet connection timeout (proposal expired)', { userId });
+					}
+
+					try {
+						const timeoutMsg = await getTranslation(ctx, 'wallet.walletConnectionTimeout');
+						await ctx.reply(timeoutMsg);
+					} catch (replyError) {
+						logger.debug('Failed to send timeout message', { userId, error: replyError });
+					}
 					this.userSessions.delete(userId);
 				});
 
@@ -640,13 +668,14 @@ export class WalletService {
 			const supported = await getTranslation(ctx, 'wallet.supportedWallets');
 			const autoConfirm = await getTranslation(ctx, 'wallet.connectionConfirmed');
 			const linkButton = await getTranslation(ctx, 'wallet.connectViaLink');
+			const androidFix = await getTranslation(ctx, 'wallet.androidTelegramFix');
 
 			await ctx.replyWithPhoto({ source: qrBuffer }, {
 				caption: `${connectTitle}\n\n` +
 					`${scanQR}\n` +
 					`${cantScan}\n\n` +
 					`${supported}\n\n` +
-					`${autoConfirm}`,
+					`${autoConfirm}${androidFix}`,
 				parse_mode: 'Markdown',
 				reply_markup: {
 					inline_keyboard: [
@@ -663,6 +692,7 @@ export class WalletService {
 
 			// Handle wallet connection approval
 			logger.info('⏳ WAITING FOR WALLET APPROVAL', { userId });
+			// Wrap in try-catch to prevent unhandled rejections from crashing the app
 			approval()
 				.then(async (walletSession) => {
 					logger.info('✅ WALLET APPROVED CONNECTION', {
@@ -730,14 +760,27 @@ export class WalletService {
 					client.on('session_delete', sessionDeleteHandler);
 				})
 				.catch(async (error) => {
-					logger.error('❌ WALLET APPROVAL ERROR', {
-						userId,
-						error: error instanceof Error ? error.message : String(error),
-						stack: error instanceof Error ? error.stack : undefined,
-						timestamp: new Date().toISOString()
-					});
-					const timeoutMsg = await getTranslation(ctx, 'wallet.walletConnectionTimeout');
-					await ctx.reply(timeoutMsg);
+					// Handle wallet connection timeout/rejection gracefully
+					const errorMessage = error instanceof Error ? error.message : String(error);
+
+					// Only log if it's not a common timeout error
+					if (!errorMessage.includes('Proposal expired')) {
+						logger.error('❌ WALLET APPROVAL ERROR', {
+							userId,
+							error: errorMessage,
+							stack: error instanceof Error ? error.stack : undefined,
+							timestamp: new Date().toISOString()
+						});
+					} else {
+						logger.debug('Wallet connection timeout (proposal expired)', { userId });
+					}
+
+					try {
+						const timeoutMsg = await getTranslation(ctx, 'wallet.walletConnectionTimeout');
+						await ctx.reply(timeoutMsg);
+					} catch (replyError) {
+						logger.debug('Failed to send timeout message', { userId, error: replyError });
+					}
 					this.userSessions.delete(userId);
 				});
 
@@ -1087,6 +1130,7 @@ export class WalletService {
 
 			// Handle wallet connection approval
 			logger.info('⏳ WAITING FOR WALLET APPROVAL', { userId });
+			// Wrap in try-catch to prevent unhandled rejections from crashing the app
 			approval()
 				.then(async (walletSession) => {
 					logger.info('✅ WALLET APPROVED CONNECTION', {
@@ -1136,9 +1180,26 @@ export class WalletService {
 					);
 				})
 				.catch(async (error) => {
-					logger.error('Connection error during reconnect', { userId, error: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
-					const failedMsg = await getTranslation(ctx, 'wallet.connectionFailed');
-					await ctx.reply(failedMsg);
+					// Handle wallet connection timeout/rejection gracefully
+					const errorMessage = error instanceof Error ? error.message : String(error);
+
+					// Only log if it's not a common timeout error
+					if (!errorMessage.includes('Proposal expired')) {
+						logger.error('Connection error during reconnect', {
+							userId,
+							error: errorMessage,
+							stack: error instanceof Error ? error.stack : undefined
+						});
+					} else {
+						logger.debug('Reconnect timeout (proposal expired)', { userId });
+					}
+
+					try {
+						const failedMsg = await getTranslation(ctx, 'wallet.connectionFailed');
+						await ctx.reply(failedMsg);
+					} catch (replyError) {
+						logger.debug('Failed to send connection failed message', { userId, error: replyError });
+					}
 				});
 
 		} catch (error) {

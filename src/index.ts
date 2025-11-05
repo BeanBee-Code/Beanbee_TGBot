@@ -24,19 +24,19 @@ process.on('unhandledRejection', (reason: any, promise) => {
     // Check if this is a WalletConnect session error
     const errorMessage = reason?.message || String(reason);
     const errorStack = reason?.stack || '';
-    
+
     // Create a unique error key
     const errorKey = `${errorMessage}-${Date.now()}`;
-    
+
     // Check if we've already seen this error recently
     if (recentErrors.has(errorMessage)) {
         return; // Skip duplicate errors
     }
-    
+
     // Add to recent errors and clear after timeout
     recentErrors.add(errorMessage);
     setTimeout(() => recentErrors.delete(errorMessage), ERROR_CACHE_TIME);
-    
+
     const walletConnectErrors = [
         'No matching key',
         'session topic doesn\'t exist',
@@ -49,18 +49,19 @@ process.on('unhandledRejection', (reason: any, promise) => {
         'session:',
         'getData',
         'proposal:',
+        'Proposal expired',
         'onSessionProposeResponse',
         '@walletconnect',
         'onSessionEvent',
         'processRequest',
         'onRelayMessage'
     ];
-    
+
     if (walletConnectErrors.some(err => errorMessage.includes(err) || errorStack.includes(err))) {
         // Don't even log these - they're too noisy
         return; // Ignore these errors as they're expected when sessions expire
     }
-    
+
     logger.error('Unhandled Rejection at:', { promise, reason });
     // Don't exit the process, just log the error
 });
@@ -68,12 +69,12 @@ process.on('unhandledRejection', (reason: any, promise) => {
 process.on('uncaughtException', (error: any) => {
     const errorMessage = error?.message || String(error);
     const errorStack = error?.stack || '';
-    
+
     // Check if we've already seen this error recently
     if (recentErrors.has(errorMessage)) {
         return; // Skip duplicate errors
     }
-    
+
     const walletConnectErrors = [
         'No matching key',
         'session topic doesn\'t exist',
@@ -86,18 +87,19 @@ process.on('uncaughtException', (error: any) => {
         'session:',
         'getData',
         'proposal:',
+        'Proposal expired',
         'onSessionProposeResponse',
         '@walletconnect',
         'onSessionEvent',
         'processRequest',
         'onRelayMessage'
     ];
-    
+
     if (walletConnectErrors.some(err => errorMessage.includes(err) || errorStack.includes(err))) {
         // Don't even log these - they're too noisy
         return; // Ignore these errors
     }
-    
+
     logger.error('Uncaught Exception:', { error });
     // Don't exit the process for now during debugging
     // process.exit(1);
@@ -150,13 +152,23 @@ async function startApplication() {
         await startApiServer();
         logger.info('✅ API server started - Cloud Run health checks will pass');
         
-        // Initialize other services in the background
+        // Initialize other services in the background (non-blocking)
         logger.info('Initializing database and services...');
-        await connectDatabase();
-        logger.info('✅ Database connected');
         
-        await initMoralis();
-        logger.info('✅ Moralis initialized');
+        // Try to connect to database but don't crash if it fails
+        connectDatabase(false).catch(err => {
+            logger.error('Initial database connection failed, will retry in background', err);
+        });
+        
+        // Give database a moment to connect before proceeding
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        try {
+            await initMoralis();
+            logger.info('✅ Moralis initialized');
+        } catch (error) {
+            logger.error('Failed to initialize Moralis, will continue without it', error);
+        }
 
         const botInstance = new TelegramBot();
         
@@ -164,8 +176,16 @@ async function startApplication() {
         (globalThis as any).botExport = botInstance;
         
         // Start Telegram bot
-        await botInstance.start();
-        logger.info('✅ Telegram bot started');
+        try {
+            await botInstance.start();
+            logger.info('✅ Telegram bot started');
+        } catch (error: any) {
+            if (error.message?.includes('Conflict: terminated by other getUpdates request')) {
+                logger.error('Another instance of the bot is already running');
+                throw error;
+            }
+            logger.error('Failed to start Telegram bot, will retry', error);
+        }
 
         logger.info('🚀 Application started successfully');
     } catch (error: any) {
@@ -175,8 +195,9 @@ async function startApplication() {
             });
             process.exit(1);
         }
-        logger.error('Failed to start application', error);
-        process.exit(1);
+        logger.error('Critical error during application startup', error);
+        // Don't exit - keep API server running for Cloud Run health checks
+        logger.warn('Application running in degraded mode - API server is up but some services may be unavailable');
     }
 }
 
