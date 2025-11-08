@@ -1,6 +1,5 @@
 # Simple Dockerfile for BeanBee TGBot
-FROM mirror.gcr.io/library/node:20.19.0
-
+FROM mirror.gcr.io/library/node:22.14.0
 # Set working directory
 WORKDIR /app
 
