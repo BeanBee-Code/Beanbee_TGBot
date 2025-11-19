@@ -39,6 +39,9 @@ export class TokenPriceMonitor {
     private isInitialized = false;
     private executingAutoTrades: Set<string> = new Set(); // Track tokens with active auto-trade executions
 
+    // Maximum number of tokens that can be tracked simultaneously (to prevent excessive API usage)
+    private readonly MAX_TRACKED_TOKENS = 30;
+
     private constructor() {
         this.initializeProvider();
     }
@@ -190,6 +193,16 @@ export class TokenPriceMonitor {
             return;
         }
 
+        // Enforce maximum tracked tokens limit to prevent excessive API usage
+        if (this.monitoredTokens.size >= this.MAX_TRACKED_TOKENS) {
+            logger.warn('Maximum tracked tokens limit reached', {
+                currentCount: this.monitoredTokens.size,
+                maxLimit: this.MAX_TRACKED_TOKENS,
+                attemptedToken: tokenAddress
+            });
+            throw new Error(`Cannot track more than ${this.MAX_TRACKED_TOKENS} tokens simultaneously. Please remove some tokens first.`);
+        }
+
         try {
             // Try to get token0 address, attempting V3 first, then V2
             let token0Address: string;
@@ -277,6 +290,20 @@ export class TokenPriceMonitor {
         } catch (error) {
             logger.error('Error removing token from monitoring', { error, tokenAddress });
         }
+    }
+
+    /**
+     * Get tracking status including current count and limit
+     */
+    getTrackingStatus(): { currentCount: number; maxLimit: number; canAddMore: boolean; remainingSlots: number } {
+        const currentCount = this.monitoredTokens.size;
+        const remainingSlots = Math.max(0, this.MAX_TRACKED_TOKENS - currentCount);
+        return {
+            currentCount,
+            maxLimit: this.MAX_TRACKED_TOKENS,
+            canAddMore: currentCount < this.MAX_TRACKED_TOKENS,
+            remainingSlots
+        };
     }
 
     private async setupExistingListeners(): Promise<void> {
@@ -1150,7 +1177,7 @@ export class TokenPriceMonitor {
             clearInterval(this.priceCheckInterval);
         }
 
-        // Check prices every 60 seconds as backup to WebSocket events
+        // Check prices every 5 minutes as backup to WebSocket events (reduced to save API calls)
         this.priceCheckInterval = setInterval(async () => {
             logger.info('Running periodic price check', { monitoredTokenCount: this.monitoredTokens.size });
             for (const token of this.monitoredTokens.values()) {
@@ -1160,7 +1187,7 @@ export class TokenPriceMonitor {
                 });
                 await this.checkTokenPriceChange(token);
             }
-        }, 60000); // 60 seconds
+        }, 300000); // 5 minutes (reduced from 60s to save API calls)
 
         logger.info('Started periodic price monitoring');
     }

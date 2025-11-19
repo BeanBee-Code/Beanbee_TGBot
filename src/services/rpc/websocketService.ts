@@ -136,18 +136,24 @@ export class WebSocketService {
                 logger.info(`📦 Block ${blockNumber} | Stats: ${JSON.stringify(this.getStats())}`);
             }
 
-            // Fetch the full block with transaction details
+            // OPTIMIZATION: Skip most blocks to reduce API usage (scan every 10th block)
+            // WebSocket event listeners will catch most transactions, this is just a backup
+            if (blockNumber % 10 !== 0) {
+                return;
+            }
+
+            // Fetch the block with transaction details (only every 10th block now)
             const block = await this.provider!.getBlock(blockNumber, true);
             if (!block || !block.prefetchedTransactions) return;
-            
-            logger.debug(`🔍 Scanning block ${blockNumber} with ${block.prefetchedTransactions.length} transactions for native BNB transfers`);
+
+            logger.debug(`🔍 Scanning block ${blockNumber} with ${block.prefetchedTransactions.length} transactions for watched wallets`);
 
             for (const tx of block.prefetchedTransactions) {
                 // Check if this transaction involves any of our watched wallets
                 const from = tx.from?.toLowerCase();
                 const to = tx.to?.toLowerCase();
                 const isWatched = (from && this.watchedWallets.has(from)) || (to && this.watchedWallets.has(to));
-                
+
                 // Process ALL transactions for watched wallets (native BNB + ERC-20 tokens + contract interactions)
                 // The processedTxHashes set prevents double-counting from event listeners
                 if (isWatched) {
