@@ -58,26 +58,21 @@ async function getVerifiedSourceCode(
   contractAddress: string,
   chainId: number = 56
 ): Promise<BscScanSourceCodeResult[] | null> {
-  // Load API key from environment
+  // Load API key from environment variables
   // IMPORTANT: Use ETHERSCAN_API_KEY for V2, not BSCSCAN_API_KEY
-  const envPath = path.join(__dirname, '../../.env');
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-
-  // Try Etherscan key first (V2 standard), fallback to BSCScan key
-  let apiKeyMatch = envContent.match(/ETHERSCAN_API_KEY=([^\n\r]+)/);
-  let apiKey = apiKeyMatch ? apiKeyMatch[1].trim() : '';
+  // Note: dotenv.config() is called in src/index.ts at startup
+  let apiKey = process.env.ETHERSCAN_API_KEY || '';
   let keySource = 'ETHERSCAN_API_KEY';
 
   if (!apiKey) {
     // Fallback to BSCScan key for backwards compatibility
-    apiKeyMatch = envContent.match(/BSCSCAN_API_KEY=([^\n\r]+)/);
-    apiKey = apiKeyMatch ? apiKeyMatch[1].trim() : '';
+    apiKey = process.env.BSCSCAN_API_KEY || '';
     keySource = 'BSCSCAN_API_KEY';
   }
 
   if (!apiKey) {
-    console.error('ERROR: No API key found in .env file');
-    console.error('Please add either ETHERSCAN_API_KEY (recommended for V2) or BSCSCAN_API_KEY');
+    console.error('ERROR: No API key found in environment variables');
+    console.error('Please set either ETHERSCAN_API_KEY (recommended for V2) or BSCSCAN_API_KEY');
     throw new Error('API key is required');
   }
 
