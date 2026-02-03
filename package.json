@@ -70,6 +70,7 @@
     "moralis": "^2.27.2",
     "natural": "^6.10.0",
     "node-cron": "^4.1.0",
+    "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
     "qrcode": "^1.5.4",
     "sentiment": "^5.0.2",
