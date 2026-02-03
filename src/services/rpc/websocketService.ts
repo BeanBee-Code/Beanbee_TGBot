@@ -76,6 +76,15 @@ export class WebSocketService {
     }
 
     public connect(): void {
+        // TEMPORARILY DISABLED: WebSocket causing SSL crashes on GCP Cloud Run
+        // The ethers.js WebSocketProvider SSL handshake failures cause uncatchable Node.js crashes
+        // TODO: Re-enable after fixing SSL/TLS compatibility with QuickNode or switching providers
+        logger.warn('⚠️ WebSocket service temporarily disabled due to SSL compatibility issues on Cloud Run');
+        this.provider = null;
+        this.isConnected = false;
+        return;
+
+        /* ORIGINAL CODE - DISABLED FOR NOW
         if (this.isConnected || !process.env.QUICKNODE_BSC_WSS_URL) {
             if (!process.env.QUICKNODE_BSC_WSS_URL) {
                 logger.warn('QUICKNODE_BSC_WSS_URL is not set. Optimized WebSocket service disabled.');
@@ -101,6 +110,7 @@ export class WebSocketService {
             this.provider = null;
             this.isConnected = false;
         }
+        */
     }
 
     private setupEventListeners(): void {
