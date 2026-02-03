@@ -57,9 +57,36 @@ process.on('unhandledRejection', (reason: any, promise) => {
         'onRelayMessage'
     ];
 
+    // Network/WebSocket errors that should not crash the process
+    const networkErrors = [
+        'EPROTO',
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'ETIMEDOUT',
+        'EPIPE',
+        'ENETUNREACH',
+        'EHOSTUNREACH',
+        'EAI_AGAIN',
+        'tlsv1 alert',
+        'SSL routines',
+        'ssl3_read_bytes',
+        'write EPROTO',
+        'read ECONNRESET'
+    ];
+
     if (walletConnectErrors.some(err => errorMessage.includes(err) || errorStack.includes(err))) {
         // Don't even log these - they're too noisy
         return; // Ignore these errors as they're expected when sessions expire
+    }
+
+    // Handle network errors gracefully - log but don't crash
+    const errorCode = reason?.code || '';
+    if (networkErrors.some(err => errorMessage.includes(err) || errorCode.includes(err))) {
+        logger.warn('Network/WebSocket rejection (non-fatal):', {
+            code: errorCode,
+            message: errorMessage.substring(0, 200)
+        });
+        return; // Don't crash on network errors
     }
 
     logger.error('Unhandled Rejection at:', { promise, reason });
@@ -95,9 +122,36 @@ process.on('uncaughtException', (error: any) => {
         'onRelayMessage'
     ];
 
+    // Network/WebSocket errors that should not crash the process
+    const networkErrors = [
+        'EPROTO',
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'ETIMEDOUT',
+        'EPIPE',
+        'ENETUNREACH',
+        'EHOSTUNREACH',
+        'EAI_AGAIN',
+        'tlsv1 alert',
+        'SSL routines',
+        'ssl3_read_bytes',
+        'write EPROTO',
+        'read ECONNRESET'
+    ];
+
     if (walletConnectErrors.some(err => errorMessage.includes(err) || errorStack.includes(err))) {
         // Don't even log these - they're too noisy
         return; // Ignore these errors
+    }
+
+    // Handle network errors gracefully - log but don't crash
+    const errorCode = error?.code || '';
+    if (networkErrors.some(err => errorMessage.includes(err) || errorCode.includes(err))) {
+        logger.warn('Network/WebSocket error (non-fatal):', {
+            code: errorCode,
+            message: errorMessage.substring(0, 200)
+        });
+        return; // Don't crash on network errors
     }
 
     logger.error('Uncaught Exception:', { error });

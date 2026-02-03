@@ -89,8 +89,18 @@ export class WebSocketService {
         }
 
         logger.info('🔌 Connecting to BSC WebSocket with hybrid monitoring (event logs + native transfers)...');
-        this.provider = new ethers.WebSocketProvider(process.env.QUICKNODE_BSC_WSS_URL);
-        this.setupEventListeners();
+        try {
+            this.provider = new ethers.WebSocketProvider(process.env.QUICKNODE_BSC_WSS_URL);
+            this.setupEventListeners();
+        } catch (error: any) {
+            logger.error('Failed to create WebSocket provider:', {
+                error: error?.message || error,
+                code: error?.code
+            });
+            // Don't throw - allow the app to continue without WebSocket
+            this.provider = null;
+            this.isConnected = false;
+        }
     }
 
     private setupEventListeners(): void {
