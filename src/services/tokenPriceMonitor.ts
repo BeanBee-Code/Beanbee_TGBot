@@ -54,6 +54,13 @@ export class TokenPriceMonitor {
     }
 
     private initializeProvider(): void {
+        // TEMPORARILY DISABLED: WebSocket causing SSL crashes on GCP Cloud Run
+        // TODO: Re-enable after fixing SSL/TLS compatibility issues
+        logger.warn('⚠️ Token price monitor WebSocket temporarily disabled due to SSL issues');
+        this.provider = null;
+        return;
+
+        /* ORIGINAL CODE - DISABLED FOR NOW
         const wsUrl = process.env.QUICKNODE_BSC_WSS_URL || 'wss://bsc-ws-node.nariox.org:443';
 
         if (!process.env.QUICKNODE_BSC_WSS_URL) {
@@ -69,6 +76,7 @@ export class TokenPriceMonitor {
             logger.error('Failed to create WebSocket provider', { error });
             this.provider = null;
         }
+        */
     }
 
     async initialize(): Promise<void> {
